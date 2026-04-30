@@ -1,4 +1,5 @@
 use crate::oscillator::{Oscillator, Waveform};
+use crate::plugin::Plugin;
 
 const STEPS: u32 = 16;
 const NOTES: u32 = 25;
@@ -254,6 +255,24 @@ impl Sequencer {
             }
             *s = mix;
         }
+    }
+}
+
+impl Plugin for Sequencer {
+    fn process(&mut self, out: &mut [f32]) {
+        Sequencer::process(self, out);
+    }
+
+    fn set_playing(&mut self, on: bool) {
+        Sequencer::set_playing(self, on);
+    }
+
+    fn voice_count_hint(&self) -> Option<u32> {
+        Some(MAX_VOICES as u32)
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+        self
     }
 }
 
