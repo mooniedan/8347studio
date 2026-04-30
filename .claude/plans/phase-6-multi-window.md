@@ -15,6 +15,19 @@ contexts but share one Y.Doc and one audio engine. We need a clean
 User-facing verb: **"control playback from a Picture-in-Picture window
 while another app is foreground."**
 
+## Designs
+
+- **P8 — PIP transport window** (320×96, transport buttons + bar.beat
+  + master meter + project name): the M3 PIP panel UI
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=PiP+Transport.html&via=share)
+
+Note: the popped-out Mixer / Piano-roll / plugin panels (M4) reuse the
+same designs as their in-root counterparts — see Phase 1's
+[Mixer View](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Mixer+View.html&via=share)
+and Phase 2's
+[Piano Roll](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Piano+Roll.html&via=share)
+/ [Subtractive Synth](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Subtractive+Synth.html&via=share).
+
 ## Milestones
 
 ### M1 — Satellite-window contract

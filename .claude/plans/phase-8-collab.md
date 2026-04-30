@@ -14,6 +14,17 @@ shared transport. No realtime audio or MIDI streaming between clients.
 Audio is rendered locally per client from the shared project + tempo
 map, kept in lockstep via clock-synced transport messages.
 
+## Designs
+
+- **P10 — Collaboration affordances** (avatars, remote cursors,
+  selection rings, "following" indicator, awareness border on
+  edited mixer strips): M3–M4 awareness UI and M5 join experience
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Collaboration+View.html&via=share)
+- **P13 — Share / Export modal** (share-live tab with room URL and
+  collaborator list): the M5 share dialog (the export-bundle and
+  render-to-audio tabs in this same mockup are Phase 9 work)
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Share+Export+Modal.html&via=share)
+
 ## Milestones
 
 ### M1 — Sync server

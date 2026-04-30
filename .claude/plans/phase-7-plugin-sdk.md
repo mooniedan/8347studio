@@ -10,6 +10,17 @@ isolated from the host.
 
 User-facing verb: **"load a third-party plugin from a URL."**
 
+## Designs
+
+- **P9 — Plugin picker / installer** (Installed grid + Browse/Install-
+  from-URL tab with registry cards, integrity checkmarks): the M4
+  plugin loader UX and M6 registry browser
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Add+Plugin+Picker.html&via=share)
+
+Third-party plugin UIs render via the same web-component sandbox that
+the host-rendered default UI ([Subtractive Synth from Phase 2](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Subtractive+Synth.html&via=share))
+established as the visual baseline.
+
 ## Milestones
 
 ### M1 — Plugin manifest format (finalized)

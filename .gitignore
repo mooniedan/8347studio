@@ -5,3 +5,6 @@ dist/
 .vite/
 .playwright-mcp/
 .claude/settings.local.json
+.obsidian/
+test-results/
+playwright-report/

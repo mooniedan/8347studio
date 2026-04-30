@@ -13,6 +13,20 @@ remove them as they ship.
 
 User-facing verb: **"refine the experience and grow the ecosystem."**
 
+## Designs
+
+- **P13 — Share / Export modal** (the *export-bundle* and *render-to-
+  audio* tabs of this mockup; the share-live tab is Phase 8): drives
+  the "Project export / import bundles" and "Stem export / bounce-in-
+  place" backlog items
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Share+Export+Modal.html&via=share)
+
+Other backlog items (controller-map presets, advanced automation
+curves, plugin registry browser polish, etc.) extend earlier phases'
+designs — re-use those mockups as starting points and capture new
+prompts in [`design-prompts.md`](design-prompts.md) when an item gets
+scheduled.
+
 ## Backlog
 
 ### Controller-map presets (carry-over from Phase 3)

@@ -9,6 +9,17 @@ and **live audio recording** via `getUserMedia`.
 
 User-facing verb: **"drag in a sample, record live audio over a beat."**
 
+## Designs
+
+- **P6 — Audio clip / waveform region** (region with embedded
+  waveform thumb, fade overlays, inline editor in inspector): the M3
+  region UI and M4 warp toggles
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Audio+Clip+View.html&via=share)
+- **P11 — Recording / armed-track states** (also covers audio-track
+  recording — the visuals are the same as Phase 3's MIDI version
+  applied to an Audio track): the M5 recording UI
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Live+Recording+States.html&via=share)
+
 ## Milestones
 
 ### M1 — Audio track type & engine path

@@ -10,3 +10,11 @@ dev: build-wasm
 
 build: build-wasm
     cd packages/app && pnpm build
+
+test-rust:
+    cargo test --workspace
+
+test-e2e: build-wasm
+    cd packages/app && pnpm exec playwright test
+
+test: test-rust test-e2e

@@ -10,6 +10,15 @@ plugin parameters.
 User-facing verb: **"plug in a MIDI keyboard, play live, record into a
 piano-roll clip."**
 
+## Designs
+
+- **P11 — Recording / armed-track states** (armed glow, growing clip
+  rect, transport record state): the M3 live-record visuals
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Live+Recording+States.html&via=share)
+- **P12 — Settings · MIDI** (devices, controller maps, MIDI Learn
+  bindings): the M1 device picker + M4 MIDI-Learn UI
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Settings+-+MIDI.html&via=share)
+
 ## Milestones
 
 ### M1 — WebMIDI plumbing

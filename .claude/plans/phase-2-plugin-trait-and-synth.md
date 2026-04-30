@@ -12,6 +12,16 @@ can write melodic lines, not just step patterns.
 User-facing verb: **"play a real synth with envelopes and write a piano-
 roll part."**
 
+## Designs
+
+- **P3 — Piano-roll editor** (keyboard rail, note grid, velocity lane,
+  inspector): the M4 piano-roll clip UI
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Piano+Roll.html&via=share)
+- **P5 — Subtractive synth panel** (osc / filter / amp ADSR / filter
+  ADSR sections): both the M2 synth UI *and* the host-rendered default
+  template (M3) for any plugin without a custom UI
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Subtractive+Synth.html&via=share)
+
 ## Milestones
 
 ### M1 — Plugin trait (Rust)

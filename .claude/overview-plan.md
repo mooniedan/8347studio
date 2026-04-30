@@ -10,7 +10,10 @@ the headline is a verb the user can do. Each phase spans the full stack
 
 The dream is `.claude/dream.md`. The architectural decisions that
 underpin every phase are summarized there and were grilled in
-`.claude/grill-sessions/2026-04-29-daw-dream.md`.
+`.claude/grill-sessions/2026-04-29-daw-dream.md`. Visual mockups for
+every major view live as claude.design artifacts indexed in
+`.claude/plans/design-prompts.md`; per-phase plans link the relevant
+ones in their own `## Designs` section.
 
 > **Building principle:** every phase ends with something a user can
 > stress-test. We don't ship "the engine is done but you can't hear it"
@@ -59,6 +62,10 @@ onward. Violating them in an early phase causes painful rework later.
    plugins land.
 5. **Tests we trust.** Cargo unit tests for DSP. Playwright for UI.
    Offline-render + audio-snapshot test for end-to-end audio regression.
+   Work TDD-style: failing test first, then implementation. When a UI
+   surface lands, its Playwright spec lands with it and joins the
+   growing regression suite — every later phase must keep the suite
+   green.
 6. **Each phase has a "verify" section** in its plan with a manual flow
    *and* an automated check.
 

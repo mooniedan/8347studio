@@ -13,6 +13,16 @@ gives Bitwig-style flexibility inside the fixed channel strip
 User-facing verb: **"shape the sound with effects, sends, and
 automation."**
 
+## Designs
+
+- **P7 — Automation lane** (curve editor below a track row, what-is-
+  automated dropdown, write/read mode): the M4 automation UI
+  · [view](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Automation+Lane.html&via=share)
+
+Note: insert FX slots and send list per-track strip already appear in
+the [Mixer View](https://claude.ai/design/p/019dde9c-e274-7e0c-a252-40c2d84785ca?file=Mixer+View.html&via=share)
+mockup from Phase 1 — match those affordances when wiring M1–M2 here.
+
 ## Milestones
 
 ### M1 — Insert FX chain
