@@ -1,83 +1,70 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import * as audio from './audio';
+  import {
+    LOW_MIDI,
+    STEPS_PER_CLIP,
+    WAVEFORMS,
+    getFirstStepSeqClip,
+    readSteps,
+    writeStepNotes,
+    getBpm,
+    setBpm,
+    getWaveform,
+    setWaveform,
+    type Project,
+    type Waveform,
+  } from './project';
 
-  const STEPS = 16;
-  const LOW = 48; // C3
+  const { project }: { project: Project } = $props();
+
   const HIGH = 72; // C5 inclusive
-  const NOTES = HIGH - LOW + 1; // 25 rows
-
-  // top row = HIGH, bottom row = LOW (piano-roll orientation)
+  const NOTES = HIGH - LOW_MIDI + 1; // 25 rows
   const rows = Array.from({ length: NOTES }, (_, r) => HIGH - r);
-
   const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const BLACK = new Set([1, 3, 6, 8, 10]);
   const isBlack = (m: number) => BLACK.has(((m % 12) + 12) % 12);
   const name = (m: number) => `${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
 
-  // steps[i] = bitmask of active notes; bit k = MIDI note LOW + k
-  let steps = $state<number[]>(Array(STEPS).fill(0));
-  let bpm = $state(120);
+  const bitFor = (midi: number) => 1 << (midi - LOW_MIDI);
+  const hasNote = (mask: number, midi: number) => ((mask >>> (midi - LOW_MIDI)) & 1) === 1;
+
+  // Mirror Y.Doc state into reactive Svelte state. The Y.Doc remains the
+  // source of truth; we resync on every observed change.
+  let steps = $state<number[]>(untrack(() => readSteps(getFirstStepSeqClip(project)!)));
+  let bpm = $state(untrack(() => getBpm(project)));
+  let waveform = $state<Waveform>(untrack(() => getWaveform(project)));
   let playing = $state(false);
   let playhead = $state(-1);
-  let waveform = $state<audio.Waveform>('sine');
-  const WAVEFORMS: audio.Waveform[] = ['sine', 'saw', 'square'];
-
-  const bitFor = (midi: number) => 1 << (midi - LOW);
-  const hasNote = (mask: number, midi: number) => ((mask >>> (midi - LOW)) & 1) === 1;
-
-  function encodeSteps(): string {
-    return steps.map((m) => (m >>> 0).toString(16).padStart(8, '0')).join('');
-  }
-
-  function decodeSteps(s: string): number[] | null {
-    if (s.length !== STEPS * 8) return null;
-    const out: number[] = [];
-    for (let i = 0; i < STEPS; i++) {
-      const v = parseInt(s.slice(i * 8, i * 8 + 8), 16);
-      if (Number.isNaN(v)) return null;
-      out.push(v >>> 0);
-    }
-    return out;
-  }
-
-  function parseHash() {
-    const h = new URLSearchParams(window.location.hash.slice(1));
-    const s = h.get('s');
-    const b = h.get('bpm');
-    const w = h.get('w');
-    if (s) {
-      const decoded = decodeSteps(s);
-      if (decoded) steps = decoded;
-    }
-    if (b !== null) bpm = Math.max(20, Math.min(300, +b));
-    if (w && (WAVEFORMS as string[]).includes(w)) waveform = w as audio.Waveform;
-  }
-
-  function writeHash() {
-    const h = new URLSearchParams();
-    h.set('s', encodeSteps());
-    h.set('bpm', String(bpm));
-    h.set('w', waveform);
-    const next = '#' + h.toString();
-    if (next !== window.location.hash) history.replaceState(null, '', next);
-  }
 
   onMount(() => {
-    parseHash();
-    // push full pattern to audio engine once ready
-    for (let i = 0; i < STEPS; i++) void audio.setStepMask(i, steps[i]);
+    const clip = getFirstStepSeqClip(project)!;
+    const observer = () => { steps = readSteps(clip); };
+    clip.observeDeep(observer);
+
+    const tempoObserver = () => { bpm = getBpm(project); };
+    project.tempoMap.observeDeep(tempoObserver);
+
+    const trackObserver = () => { waveform = getWaveform(project); };
+    project.trackById.observeDeep(trackObserver);
+
+    // Push full pattern to audio engine once ready.
+    for (let i = 0; i < STEPS_PER_CLIP; i++) void audio.setStepMask(i, steps[i]);
     audio.onStep((s) => { playhead = s; });
-    window.addEventListener('hashchange', parseHash);
-    return () => window.removeEventListener('hashchange', parseHash);
+
+    return () => {
+      clip.unobserveDeep(observer);
+      project.tempoMap.unobserveDeep(tempoObserver);
+      project.trackById.unobserveDeep(trackObserver);
+    };
   });
 
   function setCell(col: number, midi: number) {
-    // toggle just this note — polyphonic: other notes in the column are untouched.
+    const clip = getFirstStepSeqClip(project);
+    if (!clip) return;
     const next = (steps[col] ^ bitFor(midi)) >>> 0;
-    steps[col] = next;
+    writeStepNotes(clip, col, next);
     void audio.setStepMask(col, next);
-    writeHash();
   }
 
   async function togglePlay() {
@@ -85,15 +72,25 @@
       await audio.stop();
       playing = false;
     } else {
-      for (let i = 0; i < STEPS; i++) await audio.setStepMask(i, steps[i]);
+      for (let i = 0; i < STEPS_PER_CLIP; i++) await audio.setStepMask(i, steps[i]);
       await audio.setBpm(bpm);
       await audio.play();
       playing = true;
     }
   }
 
-  $effect(() => { void audio.setBpm(bpm); writeHash(); });
-  $effect(() => { void audio.setWaveform(waveform); writeHash(); });
+  function onBpmInput(e: Event) {
+    const v = Number((e.target as HTMLInputElement).value);
+    if (Number.isFinite(v)) setBpm(project, Math.max(20, Math.min(300, v)));
+  }
+
+  function onWaveformInput(e: Event) {
+    const v = (e.target as HTMLSelectElement).value as Waveform;
+    setWaveform(project, v);
+  }
+
+  $effect(() => { void audio.setBpm(bpm); });
+  $effect(() => { void audio.setWaveform(waveform); });
 </script>
 
 <div class="wrap">
@@ -101,9 +98,9 @@
 
   <div class="controls">
     <button class="play" onclick={togglePlay}>{playing ? 'stop' : 'play'}</button>
-    <label>bpm <input type="number" min="20" max="300" bind:value={bpm} /></label>
+    <label>bpm <input type="number" min="20" max="300" value={bpm} oninput={onBpmInput} /></label>
     <label>wave
-      <select bind:value={waveform}>
+      <select value={waveform} oninput={onWaveformInput}>
         {#each WAVEFORMS as w}
           <option value={w}>{w}</option>
         {/each}
@@ -117,9 +114,9 @@
         <div class="key" class:black={isBlack(midi)}>{name(midi)}</div>
       {/each}
     </div>
-    <div class="grid" style="grid-template-rows: repeat({NOTES}, 1fr); grid-template-columns: repeat({STEPS}, 1fr);">
+    <div class="grid" style="grid-template-rows: repeat({NOTES}, 1fr); grid-template-columns: repeat({STEPS_PER_CLIP}, 1fr);">
       {#each rows as midi, r}
-        {#each Array(STEPS) as _, c}
+        {#each Array(STEPS_PER_CLIP) as _, c}
           <button
             class="cell"
             class:black-row={isBlack(midi)}
@@ -135,107 +132,45 @@
     </div>
   </div>
 
-  <p class="hint">click cells to toggle notes — stack multiple notes per column for chords. URL carries the pattern.</p>
+  <p class="hint">click cells to toggle notes — stack multiple notes per column for chords.</p>
 </div>
 
 <style>
   .wrap {
     font-family: system-ui, sans-serif;
-    max-width: 960px;
-    margin: 2rem auto;
-    padding: 0 1rem;
-    color: #eee;
+    padding: 16px;
+    color: #ddd;
   }
-  h1 { font-weight: 500; letter-spacing: -0.02em; }
-  .controls {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-  }
-  .controls label {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
-    font-size: 0.9rem;
-    color: #aaa;
-  }
-  .controls input,
-  .controls select {
-    padding: 0.35rem 0.5rem;
-    background: #1a1a1a;
-    border: 1px solid #333;
-    border-radius: 4px;
-    color: #eee;
-    font: inherit;
-  }
-  .controls input { width: 5.5rem; }
-  .play {
-    padding: 0.5rem 1.2rem;
-    background: #2563eb;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .play:hover { background: #1d4ed8; }
+  h1 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .controls label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+  .controls input, .controls select { font: inherit; padding: 2px 4px; }
+  button.play { padding: 4px 12px; }
 
-  .roll {
-    display: grid;
-    grid-template-columns: 54px 1fr;
-    border: 1px solid #2a2a2a;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .keys {
-    display: grid;
-    grid-template-rows: repeat(25, 1fr);
-    background: #111;
-  }
+  .roll { display: grid; grid-template-columns: 32px 1fr; gap: 4px; }
+  .keys { display: grid; grid-auto-rows: 1fr; }
   .key {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding-right: 6px;
-    font-size: 0.65rem;
-    color: #888;
-    background: #f4f4f4;
-    color: #333;
-    border-bottom: 1px solid #d0d0d0;
-    height: 22px;
+    font-size: 9px; line-height: 1; padding: 1px 2px; color: #666;
+    background: #eee; border-bottom: 1px solid #ccc;
+    display: flex; align-items: center; justify-content: flex-end;
   }
-  .key.black {
-    background: #222;
-    color: #777;
-    border-bottom-color: #111;
-  }
+  .key.black { background: #444; color: #aaa; }
+
   .grid {
     display: grid;
-    gap: 0;
-    background: #0a0a0a;
+    width: 640px;
+    aspect-ratio: 16 / 25;
+    background: #222;
+    border: 1px solid #333;
   }
   .cell {
-    height: 22px;
-    background: #161616;
-    border: none;
-    border-right: 1px solid #0a0a0a;
-    border-bottom: 1px solid #0a0a0a;
-    cursor: pointer;
-    padding: 0;
+    appearance: none; border: none; background: transparent;
+    border-right: 1px solid #2a2a2a;
+    border-bottom: 1px solid #2a2a2a;
+    cursor: pointer; padding: 0;
   }
-  .cell.black-row { background: #0e0e0e; }
-  .cell.beat { border-left: 1px solid #2a2a2a; }
-  .cell:hover { background: #1f1f1f; }
-  .cell.on {
-    background: #2563eb;
-  }
-  .cell.playhead { background: #1f1f1f; }
-  .cell.black-row.playhead { background: #191919; }
-  .cell.on.playhead {
-    background: #60a5fa;
-    box-shadow: 0 0 0 1px #93c5fd inset;
-  }
-  .hint { color: #666; font-size: 0.8rem; margin-top: 1rem; }
+  .cell.black-row { background: #1c1c1c; }
+  .cell.beat { border-left: 1px solid #444; }
+  .cell.on { background: #ff8c00; }
+  .cell.playhead { box-shadow: inset 0 0 0 1px #ff0; }
 </style>
