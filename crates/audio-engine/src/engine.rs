@@ -3,11 +3,16 @@ use crate::oscillator::Waveform;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
 use crate::snapshot::{InstrumentSnapshot, ProjectSnapshot};
+use crate::tempo_map::TempoMap;
 use crate::track::TrackEngine;
 
 pub struct Engine {
     pub tracks: Vec<TrackEngine>,
     pub master_gain: f32,
+    pub tempo_map: TempoMap,
+    pub playing: bool,
+    /// Fractional tick position; integer view via `current_tick()`.
+    tick_pos: f64,
     right_scratch: Vec<f32>,
     sample_rate: f32,
 }
@@ -17,9 +22,16 @@ impl Engine {
         Self {
             tracks: Vec::new(),
             master_gain: 1.0,
+            tempo_map: TempoMap::new(sample_rate),
+            playing: false,
+            tick_pos: 0.0,
             right_scratch: Vec::new(),
             sample_rate,
         }
+    }
+
+    pub fn current_tick(&self) -> u64 {
+        self.tick_pos as u64
     }
 
     /// Replace the structural state with `snap`. Track count, kind, and
@@ -75,14 +87,36 @@ impl Engine {
     }
 
     pub fn set_playing(&mut self, on: bool) {
+        self.playing = on;
+        if !on {
+            self.tick_pos = 0.0;
+        }
         for t in self.tracks.iter_mut() {
             t.instrument.set_playing(on);
+        }
+    }
+
+    pub fn locate(&mut self, tick: u64) {
+        self.tick_pos = tick as f64;
+    }
+
+    pub fn set_bpm(&mut self, bpm: f32) {
+        self.tempo_map.set_bpm(bpm);
+        // Phase-1 carry-over: per-track Sequencer keeps its own
+        // samples_per_step counter while M5 hasn't moved scheduling out
+        // of the instrument. Propagate the BPM so the two stay aligned.
+        for t in self.tracks.iter_mut() {
+            if let Some(seq) = t.instrument.as_any_mut().downcast_mut::<Sequencer>() {
+                seq.set_bpm(bpm);
+            }
         }
     }
 
     pub fn apply_event(&mut self, ev: Event) {
         match ev {
             Event::Transport { play } => self.set_playing(play),
+            Event::Locate { tick } => self.locate(tick),
+            Event::SetBpm { bpm } => self.set_bpm(bpm),
             Event::SetTrackGain { track, gain } => {
                 if let Some(t) = self.tracks.get_mut(track as usize) {
                     t.gain = gain;
@@ -125,6 +159,7 @@ impl Engine {
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
         debug_assert_eq!(left.len(), right.len());
+        self.advance_tick(left.len());
         for s in left.iter_mut() {
             *s = 0.0;
         }
@@ -144,16 +179,25 @@ impl Engine {
         }
     }
 
+    fn advance_tick(&mut self, frames: usize) {
+        if !self.playing {
+            return;
+        }
+        let dt = self
+            .tempo_map
+            .ticks_for_samples(frames, self.current_tick());
+        self.tick_pos += dt;
+    }
+
     /// Mono compatibility path for the Phase-1 worklet. Renders the full
     /// stereo bus and collapses it via constant-power sum. M3 replaces
     /// this with a true stereo path over the SAB ring.
     pub fn process_mono(&mut self, out: &mut [f32]) {
+        self.advance_tick(out.len());
         if self.right_scratch.len() < out.len() {
             self.right_scratch.resize(out.len(), 0.0);
         }
         let right = &mut self.right_scratch[..out.len()];
-        // Borrow-checker: split_at_mut on the explicit args, can't reuse
-        // process_stereo here without cloning. Re-inlined for now.
         for s in out.iter_mut() {
             *s = 0.0;
         }
@@ -399,6 +443,74 @@ mod tests {
             .expect("seq instrument") as *mut Sequencer as usize;
         assert_eq!(original, after, "instrument was rebuilt on cosmetic change");
         assert!(e.tracks[0].mute);
+    }
+
+    #[test]
+    fn current_tick_advances_under_play() {
+        let mut e = Engine::new(48_000.0);
+        let seq = Sequencer::new(48_000.0);
+        e.add_track(TrackEngine::new(Box::new(seq)));
+        e.set_playing(true);
+
+        // 1 second at 120 BPM = 2 beats × 960 PPQ = 1920 ticks.
+        let mut buf = alloc::vec![0.0f32; 48_000];
+        e.process_mono(&mut buf);
+        let t = e.current_tick();
+        assert!(
+            (t as i64 - 1920).abs() <= 1,
+            "tick {} not within 1 of 1920",
+            t
+        );
+    }
+
+    #[test]
+    fn current_tick_freezes_when_stopped() {
+        let mut e = Engine::new(48_000.0);
+        let seq = Sequencer::new(48_000.0);
+        e.add_track(TrackEngine::new(Box::new(seq)));
+        // Not playing.
+        let mut buf = alloc::vec![0.0f32; 4_800];
+        e.process_mono(&mut buf);
+        assert_eq!(e.current_tick(), 0);
+    }
+
+    #[test]
+    fn set_bpm_doubles_tick_rate() {
+        let mut e = Engine::new(48_000.0);
+        let seq = Sequencer::new(48_000.0);
+        e.add_track(TrackEngine::new(Box::new(seq)));
+        e.set_playing(true);
+        e.set_bpm(60.0);
+        let mut buf = alloc::vec![0.0f32; 24_000];
+        e.process_mono(&mut buf);
+        let slow = e.current_tick();
+
+        e.locate(0);
+        e.set_bpm(120.0);
+        let mut buf = alloc::vec![0.0f32; 24_000];
+        e.process_mono(&mut buf);
+        let fast = e.current_tick();
+        assert!(
+            (fast as i64 - 2 * slow as i64).abs() <= 2,
+            "fast={fast} slow={slow}"
+        );
+    }
+
+    #[test]
+    fn locate_event_jumps_the_playhead() {
+        let mut e = Engine::new(48_000.0);
+        let seq = Sequencer::new(48_000.0);
+        e.add_track(TrackEngine::new(Box::new(seq)));
+        let mut buf = alloc::vec![0u8; crate::sab_ring::HEADER_BYTES + 64];
+        crate::sab_ring::init(&mut buf);
+        {
+            let mut w = crate::sab_ring::RingWriter::new(&mut buf);
+            let payload = crate::event::encode(&Event::Locate { tick: 4242 }).expect("encode");
+            assert!(w.write(&payload));
+        }
+        let mut r = crate::sab_ring::RingReader::new(&mut buf);
+        e.drain_events(&mut r);
+        assert_eq!(e.current_tick(), 4242);
     }
 
     #[test]

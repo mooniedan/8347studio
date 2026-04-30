@@ -83,12 +83,14 @@ class DawProcessor extends AudioWorkletProcessor {
         value = this.exports.debug_master_gain();
       } else if (msg.what === 'trackCount') {
         value = this.exports.debug_track_count();
+      } else if (msg.what === 'currentTick') {
+        value = this.exports.debug_current_tick();
+      } else if (msg.what === 'bpm') {
+        value = this.exports.debug_bpm();
       }
       this.port.postMessage({ type: 'debug-reply', id: msg.id, what: msg.what, value });
     } else if (msg.type === 'setStepMask') {
       this.exports.set_step_mask(msg.i >>> 0, msg.mask >>> 0);
-    } else if (msg.type === 'setBpm') {
-      this.exports.set_bpm(msg.bpm);
     } else if (msg.type === 'setWaveform') {
       this.exports.set_waveform(msg.w >>> 0);
     } else if (msg.type === 'setPlaying') {

@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+// Order is the postcard wire format — JS bridge must match this. Append
+// new variants to the end so existing discriminants keep their value.
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     Transport { play: bool },
@@ -14,6 +17,8 @@ pub enum Event {
     SetTrackMute { track: u32, mute: bool },
     SetTrackSolo { track: u32, solo: bool },
     SetMasterGain { gain: f32 },
+    SetBpm { bpm: f32 },
+    Locate { tick: u64 },
 }
 
 pub fn encode(ev: &Event) -> postcard::Result<alloc::vec::Vec<u8>> {

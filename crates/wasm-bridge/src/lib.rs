@@ -131,11 +131,6 @@ pub extern "C" fn set_step_mask(i: u32, mask: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn set_bpm(bpm: f32) {
-    unsafe { seq0().set_bpm(bpm) }
-}
-
-#[no_mangle]
 pub extern "C" fn set_playing(on: u32) {
     unsafe { engine().set_playing(on != 0) }
 }
@@ -176,4 +171,17 @@ pub extern "C" fn debug_master_gain() -> f32 {
 #[no_mangle]
 pub extern "C" fn debug_track_count() -> u32 {
     unsafe { engine().tracks.len() as u32 }
+}
+
+#[no_mangle]
+pub extern "C" fn debug_current_tick() -> f64 {
+    // u64 doesn't survive the f64 return path used by the worklet's
+    // debug RPC, but Phase-1 ticks fit comfortably in 53 bits, so f64
+    // is exact for any practical playhead position.
+    unsafe { engine().current_tick() as f64 }
+}
+
+#[no_mangle]
+pub extern "C" fn debug_bpm() -> f32 {
+    unsafe { engine().tempo_map.bpm_at(engine().current_tick()) }
 }

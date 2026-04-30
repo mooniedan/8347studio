@@ -84,7 +84,8 @@
       playing = false;
     } else {
       for (let i = 0; i < STEPS_PER_CLIP; i++) await audio.setStepMask(i, steps[i]);
-      await audio.setBpm(bpm);
+      // BPM already flows to the engine via the SAB ring (engine-bridge
+      // observes Y.Doc.tempoMap → SetBpm event).
       await audio.play();
       playing = true;
     }
@@ -105,8 +106,26 @@
     if (Number.isFinite(v)) setTrackGain(project, 0, Math.max(0, Math.min(1, v)));
   }
 
-  $effect(() => { void audio.setBpm(bpm); });
   $effect(() => { void audio.setWaveform(waveform); });
+
+  // Poll the engine's current_tick while playing so the transport
+  // counter stays live.
+  let currentTick = $state(0);
+  $effect(() => {
+    if (!playing) return;
+    let cancelled = false;
+    let raf = 0;
+    const tick = async () => {
+      if (cancelled) return;
+      currentTick = await audio.debugRead('currentTick');
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  });
 </script>
 
 <div class="wrap">
@@ -134,6 +153,7 @@
       />
       <span class="gain-readout" data-testid="track-gain-readout">{trackGain.toFixed(2)}</span>
     </label>
+    <span class="tick-readout" data-testid="current-tick">tick {currentTick}</span>
   </div>
 
   <div class="roll">

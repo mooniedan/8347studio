@@ -79,20 +79,14 @@ export async function setStepMask(i: number, mask: number): Promise<void> {
   node!.port.postMessage({ type: 'setStepMask', i, mask });
 }
 
-export async function setBpm(bpm: number): Promise<void> {
-  await ensureReady();
-  node!.port.postMessage({ type: 'setBpm', bpm });
-}
-
 export async function setWaveform(w: Waveform): Promise<void> {
   await ensureReady();
   node!.port.postMessage({ type: 'setWaveform', w: WAVEFORM_CODE[w] });
 }
 
 /// Test-only: ask the worklet to read a debug export from the wasm engine.
-/// Available targets: 'trackGain' (with `track`), 'masterGain', 'trackCount'.
 export async function debugRead(
-  what: 'trackGain' | 'masterGain' | 'trackCount',
+  what: 'trackGain' | 'masterGain' | 'trackCount' | 'currentTick' | 'bpm',
   track = 0,
 ): Promise<number> {
   await ensureReady();

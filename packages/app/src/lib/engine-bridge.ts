@@ -45,6 +45,8 @@ const EV_SET_TRACK_PAN = 2;
 const EV_SET_TRACK_MUTE = 3;
 const EV_SET_TRACK_SOLO = 4;
 const EV_SET_MASTER_GAIN = 5;
+const EV_SET_BPM = 6;
+const EV_LOCATE = 7;
 
 function f32ToBytes(v: number): Uint8Array {
   const buf = new ArrayBuffer(4);
@@ -98,6 +100,32 @@ export function encodeSetTrackSolo(track: number, solo: boolean): Uint8Array {
 
 export function encodeSetMasterGain(gain: number): Uint8Array {
   return concat([new Uint8Array([EV_SET_MASTER_GAIN]), f32ToBytes(gain)]);
+}
+
+export function encodeSetBpm(bpm: number): Uint8Array {
+  return concat([new Uint8Array([EV_SET_BPM]), f32ToBytes(bpm)]);
+}
+
+function u64LeBytes(v: number): Uint8Array {
+  // Phase-1 ticks fit in 32 bits, but the wire format is u64 LE.
+  // postcard encodes u64 as a varint, NOT raw — match that.
+  return u64VarintToBytes(v);
+}
+
+function u64VarintToBytes(v: number): Uint8Array {
+  const out: number[] = [];
+  // JS can represent integers up to 2^53; for tick values this is plenty.
+  let n = Math.max(0, Math.floor(v));
+  while (n >= 0x80) {
+    out.push((n & 0x7f) | 0x80);
+    n = Math.floor(n / 128);
+  }
+  out.push(n & 0x7f);
+  return new Uint8Array(out);
+}
+
+export function encodeLocate(tick: number): Uint8Array {
+  return concat([new Uint8Array([EV_LOCATE]), u64LeBytes(tick)]);
 }
 
 // ---- Ring writer -------------------------------------------------------
@@ -224,6 +252,8 @@ export interface Bridge {
   setTrackSolo(track: number, solo: boolean): void;
   setMasterGain(gain: number): void;
   setTransport(playing: boolean): void;
+  setBpm(bpm: number): void;
+  locate(tick: number): void;
   destroy(): void;
 }
 
@@ -265,8 +295,15 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   project.tracks.observeDeep(onStructural);
   project.trackById.observeDeep(onStructural);
 
+  const onTempoChange = () => {
+    const bpm = projectBpm(project);
+    writer.write(encodeSetBpm(bpm));
+  };
+  project.tempoMap.observeDeep(onTempoChange);
+
   // Initial sync.
   rebuild();
+  onTempoChange();
 
   return {
     rebuild,
@@ -288,9 +325,16 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
     setTransport(playing) {
       writer.write(encodeTransport(playing));
     },
+    setBpm(bpm) {
+      writer.write(encodeSetBpm(bpm));
+    },
+    locate(tick) {
+      writer.write(encodeLocate(tick));
+    },
     destroy() {
       project.tracks.unobserveDeep(onStructural);
       project.trackById.unobserveDeep(onStructural);
+      project.tempoMap.unobserveDeep(onTempoChange);
     },
   };
 }

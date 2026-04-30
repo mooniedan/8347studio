@@ -51,9 +51,12 @@
       get() {
         return {
           rebuild: () => b.rebuild(),
+          setTransport: (play: boolean) => b.setTransport(play),
           debugTrackGain: (track: number) => audio.debugRead('trackGain', track),
           debugTrackCount: () => audio.debugRead('trackCount'),
           debugMasterGain: () => audio.debugRead('masterGain'),
+          debugCurrentTick: () => audio.debugRead('currentTick'),
+          debugBpm: () => audio.debugRead('bpm'),
         };
       },
     });

@@ -7,4 +7,5 @@ pub mod plugin;
 pub mod sab_ring;
 pub mod sequencer;
 pub mod snapshot;
+pub mod tempo_map;
 pub mod track;
