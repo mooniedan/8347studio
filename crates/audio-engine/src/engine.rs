@@ -639,6 +639,30 @@ mod tests {
     }
 
     #[test]
+    fn track_peak_rises_with_audio_then_falls_when_silenced() {
+        let mut e = Engine::new(48_000.0);
+        e.add_track(const_track(0.5));
+        e.set_playing(true);
+
+        let mut buf = alloc::vec![0.0f32; 1024];
+        e.process_mono(&mut buf);
+        let active_peak = e.tracks[0].peak;
+        assert!(active_peak > 0.4, "expected loud peak, got {}", active_peak);
+
+        e.tracks[0].mute = true;
+        // Render many blocks so the decay has time to drag the meter down.
+        for _ in 0..200 {
+            e.process_mono(&mut buf);
+        }
+        let muted_peak = e.tracks[0].peak;
+        assert!(
+            muted_peak < 0.05,
+            "meter still hot ({}) after long silence",
+            muted_peak
+        );
+    }
+
+    #[test]
     fn master_gain_scales_the_bus() {
         let mut e = Engine::new(48_000.0);
         e.add_track(const_track(0.5));

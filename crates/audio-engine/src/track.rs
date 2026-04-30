@@ -11,6 +11,9 @@ pub struct TrackEngine {
     pub mute: bool,
     pub solo: bool,
     pub voices: u32,
+    /// Decaying peak meter — updated each render. Reading is fine on
+    /// any thread (single u32 bit-pattern under wasm32).
+    pub peak: f32,
     scratch: Vec<f32>,
 }
 
@@ -25,6 +28,7 @@ impl TrackEngine {
             mute: false,
             solo: false,
             voices,
+            peak: 0.0,
             scratch: Vec::new(),
         }
     }
@@ -39,6 +43,25 @@ impl TrackEngine {
         }
         let mono = &mut self.scratch[..left.len()];
         self.instrument.process(mono);
+        // Peak meter — reflects what the user *hears* (post-gain,
+        // post-mute/solo) so the UI matches their action.
+        let mut block_peak = 0.0f32;
+        let effective_gain = if silenced || self.mute { 0.0 } else { self.gain };
+        for s in mono.iter() {
+            let v = (s * effective_gain).abs();
+            if v > block_peak {
+                block_peak = v;
+            }
+        }
+        // Smooth decay: ~10× per second of release. Block_peak wins on
+        // attack; otherwise the meter falls.
+        const DECAY: f32 = 0.85;
+        if block_peak > self.peak {
+            self.peak = block_peak;
+        } else {
+            self.peak = self.peak * DECAY + block_peak * (1.0 - DECAY);
+        }
+
         if silenced || self.mute {
             return;
         }

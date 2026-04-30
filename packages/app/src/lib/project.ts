@@ -331,6 +331,50 @@ export function getWaveform(p: Project): Waveform {
   return w === 'saw' || w === 'square' ? w : 'sine';
 }
 
+export function getMasterGain(p: Project): number {
+  return (p.meta.get('masterGain') as number | undefined) ?? 1.0;
+}
+
+export function setMasterGain(p: Project, gain: number): void {
+  p.meta.set('masterGain', Math.max(0, Math.min(1, gain)));
+}
+
+export function setTrackMute(p: Project, idx: number, mute: boolean): void {
+  if (idx < 0 || idx >= p.tracks.length) return;
+  const id = p.tracks.get(idx);
+  p.trackById.get(id)?.set('mute', mute);
+}
+
+export function setTrackSolo(p: Project, idx: number, solo: boolean): void {
+  if (idx < 0 || idx >= p.tracks.length) return;
+  const id = p.tracks.get(idx);
+  p.trackById.get(id)?.set('solo', solo);
+}
+
+export function setTrackPan(p: Project, idx: number, pan: number): void {
+  if (idx < 0 || idx >= p.tracks.length) return;
+  const id = p.tracks.get(idx);
+  p.trackById.get(id)?.set('pan', Math.max(-1, Math.min(1, pan)));
+}
+
+export function getTrackMute(p: Project, idx: number): boolean {
+  if (idx < 0 || idx >= p.tracks.length) return false;
+  const id = p.tracks.get(idx);
+  return ((p.trackById.get(id)?.get('mute') as boolean | undefined) ?? false);
+}
+
+export function getTrackSolo(p: Project, idx: number): boolean {
+  if (idx < 0 || idx >= p.tracks.length) return false;
+  const id = p.tracks.get(idx);
+  return ((p.trackById.get(id)?.get('solo') as boolean | undefined) ?? false);
+}
+
+export function getTrackPan(p: Project, idx: number): number {
+  if (idx < 0 || idx >= p.tracks.length) return 0;
+  const id = p.tracks.get(idx);
+  return ((p.trackById.get(id)?.get('pan') as number | undefined) ?? 0);
+}
+
 export function getTrackGain(p: Project, idx = 0): number {
   if (idx >= p.tracks.length) return 1;
   const id = p.tracks.get(idx);

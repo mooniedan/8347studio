@@ -175,6 +175,17 @@ pub extern "C" fn debug_track_count() -> u32 {
 }
 
 #[no_mangle]
+pub extern "C" fn debug_track_peak(idx: u32) -> f32 {
+    unsafe {
+        engine()
+            .tracks
+            .get(idx as usize)
+            .map(|t| t.peak)
+            .unwrap_or(0.0)
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn debug_current_tick() -> f64 {
     // u64 doesn't survive the f64 return path used by the worklet's
     // debug RPC, but Phase-1 ticks fit comfortably in 53 bits, so f64

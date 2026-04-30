@@ -336,6 +336,58 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   };
   project.tempoMap.observeDeep(onTempoChange);
 
+  // Mirror master gain + per-track mixer params (gain/pan/mute/solo)
+  // changes from the Y.Doc into SAB events. These are cosmetic
+  // (engine state changes per-block) so they don't trigger a snapshot
+  // rebuild.
+  let lastMasterGain = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
+  const onMetaChange = () => {
+    const next = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
+    if (next !== lastMasterGain) {
+      lastMasterGain = next;
+      writer.write(encodeSetMasterGain(next));
+    }
+  };
+  project.meta.observe(onMetaChange);
+
+  // Per-track param mirror — fires for every cosmetic edit on any
+  // track. We diff against last-known state so unrelated edits (e.g.
+  // adding a clip to a track) don't cause spurious SAB writes.
+  type TrackState = { gain: number; pan: number; mute: boolean; solo: boolean };
+  const lastTrackState = new Map<string, TrackState>();
+  const snapshotTrackState = (id: string): TrackState | null => {
+    const t = project.trackById.get(id);
+    if (!t) return null;
+    return {
+      gain: (t.get('gain') as number | undefined) ?? 1,
+      pan: (t.get('pan') as number | undefined) ?? 0,
+      mute: (t.get('mute') as boolean | undefined) ?? false,
+      solo: (t.get('solo') as boolean | undefined) ?? false,
+    };
+  };
+  const syncTrackParams = () => {
+    for (let i = 0; i < project.tracks.length; i++) {
+      const id = project.tracks.get(i);
+      const next = snapshotTrackState(id);
+      if (!next) continue;
+      const prev = lastTrackState.get(id);
+      if (!prev) {
+        lastTrackState.set(id, next);
+        // Initial sync — engine already builds the track from the
+        // snapshot, so no extra writes needed for *this* track.
+        continue;
+      }
+      if (next.gain !== prev.gain) writer.write(encodeSetTrackGain(i, next.gain));
+      if (next.pan !== prev.pan) writer.write(encodeSetTrackPan(i, next.pan));
+      if (next.mute !== prev.mute) writer.write(encodeSetTrackMute(i, next.mute));
+      if (next.solo !== prev.solo) writer.write(encodeSetTrackSolo(i, next.solo));
+      lastTrackState.set(id, next);
+    }
+  };
+  project.trackById.observeDeep(syncTrackParams);
+  // Seed the diff state so the first real edit produces an event.
+  syncTrackParams();
+
   // Initial sync.
   rebuild();
   onTempoChange();
@@ -369,8 +421,10 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
     destroy() {
       project.tracks.unobserveDeep(onStructural);
       project.trackById.unobserveDeep(onStructural);
+      project.trackById.unobserveDeep(syncTrackParams);
       project.tempoMap.unobserveDeep(onTempoChange);
       project.clipById.unobserve(onClipChange);
+      project.meta.unobserve(onMetaChange);
     },
   };
 }

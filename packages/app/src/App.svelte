@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import Sequencer from './lib/Sequencer.svelte';
   import TrackList from './lib/TrackList.svelte';
+  import Mixer from './lib/Mixer.svelte';
   import { createProject, type Project } from './lib/project';
   import * as audio from './lib/audio';
   import { attachBridge, type Bridge } from './lib/engine-bridge';
@@ -56,6 +57,7 @@
           debugMasterGain: () => audio.debugRead('masterGain'),
           debugCurrentTick: () => audio.debugRead('currentTick'),
           debugBpm: () => audio.debugRead('bpm'),
+          debugTrackPeak: (track: number) => audio.debugRead('trackPeak', track),
         };
       },
     });
@@ -75,6 +77,7 @@
       />
       <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
     </div>
+    <Mixer {project} />
   {/if}
 {/await}
 

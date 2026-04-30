@@ -64,11 +64,10 @@
 
     const trackObserver = () => {
       waveform = getWaveform(project);
-      const next = getTrackGain(project, idx);
-      if (next !== trackGain) {
-        trackGain = next;
-        bridge.setTrackGain(idx, next);
-      }
+      // Gain mirror — engine-bridge handles the SAB event itself when
+      // the Y.Doc value changes; this just keeps the slider's display
+      // in sync if the value moves from outside this component.
+      trackGain = getTrackGain(project, idx);
     };
     project.trackById.observeDeep(trackObserver);
 
