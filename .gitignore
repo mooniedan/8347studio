@@ -1,0 +1,7 @@
+target/
+node_modules/
+dist/
+*.wasm
+.vite/
+.playwright-mcp/
+.claude/settings.local.json
