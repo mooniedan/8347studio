@@ -278,6 +278,20 @@ export function getWaveform(p: Project): Waveform {
   return w === 'saw' || w === 'square' ? w : 'sine';
 }
 
+export function getTrackGain(p: Project, idx = 0): number {
+  if (idx >= p.tracks.length) return 1;
+  const id = p.tracks.get(idx);
+  const track = p.trackById.get(id);
+  return (track?.get('gain') as number | undefined) ?? 1;
+}
+
+export function setTrackGain(p: Project, idx: number, gain: number): void {
+  if (idx >= p.tracks.length) return;
+  const id = p.tracks.get(idx);
+  const track = p.trackById.get(id);
+  track?.set('gain', gain);
+}
+
 export function setWaveform(p: Project, waveform: Waveform): void {
   const trackId = p.tracks.length > 0 ? p.tracks.get(0) : null;
   if (!trackId) return;

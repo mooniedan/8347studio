@@ -12,11 +12,14 @@
     setBpm,
     getWaveform,
     setWaveform,
+    getTrackGain,
+    setTrackGain,
     type Project,
     type Waveform,
   } from './project';
+  import type { Bridge } from './engine-bridge';
 
-  const { project }: { project: Project } = $props();
+  const { project, bridge }: { project: Project; bridge: Bridge } = $props();
 
   const HIGH = 72; // C5 inclusive
   const NOTES = HIGH - LOW_MIDI + 1; // 25 rows
@@ -34,6 +37,7 @@
   let steps = $state<number[]>(untrack(() => readSteps(getFirstStepSeqClip(project)!)));
   let bpm = $state(untrack(() => getBpm(project)));
   let waveform = $state<Waveform>(untrack(() => getWaveform(project)));
+  let trackGain = $state(untrack(() => getTrackGain(project, 0)));
   let playing = $state(false);
   let playhead = $state(-1);
 
@@ -45,7 +49,14 @@
     const tempoObserver = () => { bpm = getBpm(project); };
     project.tempoMap.observeDeep(tempoObserver);
 
-    const trackObserver = () => { waveform = getWaveform(project); };
+    const trackObserver = () => {
+      waveform = getWaveform(project);
+      const next = getTrackGain(project, 0);
+      if (next !== trackGain) {
+        trackGain = next;
+        bridge.setTrackGain(0, next);
+      }
+    };
     project.trackById.observeDeep(trackObserver);
 
     // Push full pattern to audio engine once ready.
@@ -89,6 +100,11 @@
     setWaveform(project, v);
   }
 
+  function onTrackGainInput(e: Event) {
+    const v = Number((e.target as HTMLInputElement).value);
+    if (Number.isFinite(v)) setTrackGain(project, 0, Math.max(0, Math.min(1, v)));
+  }
+
   $effect(() => { void audio.setBpm(bpm); });
   $effect(() => { void audio.setWaveform(waveform); });
 </script>
@@ -105,6 +121,18 @@
           <option value={w}>{w}</option>
         {/each}
       </select>
+    </label>
+    <label>gain
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={trackGain}
+        oninput={onTrackGainInput}
+        data-testid="track-gain"
+      />
+      <span class="gain-readout" data-testid="track-gain-readout">{trackGain.toFixed(2)}</span>
     </label>
   </div>
 

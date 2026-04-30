@@ -29,7 +29,14 @@ const LEGACY_S =
 async function projectShape(page: Page) {
   return page.evaluate(() => {
     // The app exposes a debug handle on window for tests only.
-    const w = window as unknown as { __project?: { trackCount: number; clipCount: number; firstClipKind?: string } };
+    const w = window as unknown as {
+      __project?: {
+        trackCount: number;
+        clipCount: number;
+        firstClipKind?: string;
+        firstTrackGain?: number;
+      };
+    };
     return w.__project;
   });
 }
@@ -52,7 +59,7 @@ test.describe('phase-1 / M1 project state', () => {
 
     // Y.Doc shape: one MIDI track, one StepSeq clip.
     const shape = await projectShape(page);
-    expect(shape).toEqual({ trackCount: 1, clipCount: 1, firstClipKind: 'StepSeq' });
+    expect(shape).toMatchObject({ trackCount: 1, clipCount: 1, firstClipKind: 'StepSeq' });
   });
 
   test('state persists across reload via IndexedDB', async ({ page }) => {

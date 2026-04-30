@@ -6,6 +6,21 @@
 
 use core::any::Any;
 
+/// No-op plugin used by tracks without a loaded instrument (audio/bus
+/// tracks in Phase 1, MIDI tracks pending plugin selection).
+pub struct Silence;
+
+impl Plugin for Silence {
+    fn process(&mut self, out: &mut [f32]) {
+        for s in out.iter_mut() {
+            *s = 0.0;
+        }
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 pub trait Plugin: Send + Any {
     /// Render samples into `out` (mono, replacing — the implementation is
     /// expected to overwrite each sample, not accumulate).

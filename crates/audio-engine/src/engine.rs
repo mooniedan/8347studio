@@ -1,17 +1,67 @@
+use crate::event::Event;
+use crate::oscillator::Waveform;
+use crate::sab_ring::RingReader;
+use crate::sequencer::Sequencer;
+use crate::snapshot::{InstrumentSnapshot, ProjectSnapshot};
 use crate::track::TrackEngine;
 
 pub struct Engine {
     pub tracks: Vec<TrackEngine>,
     pub master_gain: f32,
     right_scratch: Vec<f32>,
+    sample_rate: f32,
 }
 
 impl Engine {
-    pub fn new() -> Self {
+    pub fn new(sample_rate: f32) -> Self {
         Self {
             tracks: Vec::new(),
             master_gain: 1.0,
             right_scratch: Vec::new(),
+            sample_rate,
+        }
+    }
+
+    /// Replace the structural state with `snap`. Track count, kind, and
+    /// instrument identity are taken from the snapshot; existing track
+    /// instances are reused only when track count *and* instrument kind
+    /// match, so live voices keep playing across cosmetic edits (mute,
+    /// gain, etc.). Anything more invasive (track added/removed, voice
+    /// count changed, instrument swapped) rebuilds the affected tracks.
+    pub fn apply_snapshot(&mut self, snap: &ProjectSnapshot) {
+        self.master_gain = snap.master_gain;
+
+        let same_count = snap.tracks.len() == self.tracks.len();
+        for (i, ts) in snap.tracks.iter().enumerate() {
+            let needs_rebuild = !same_count
+                || self.tracks[i].voices != ts.voices
+                || !instrument_matches(&self.tracks[i], &ts.instrument);
+            if needs_rebuild {
+                let track = build_track(self.sample_rate, ts);
+                if i < self.tracks.len() {
+                    self.tracks[i] = track;
+                } else {
+                    self.tracks.push(track);
+                }
+            } else {
+                let track = &mut self.tracks[i];
+                track.gain = ts.gain;
+                track.pan = ts.pan;
+                track.mute = ts.mute;
+                track.solo = ts.solo;
+                if let InstrumentSnapshot::BuiltinSequencer { waveform } = ts.instrument {
+                    if let Some(seq) = track
+                        .instrument
+                        .as_any_mut()
+                        .downcast_mut::<Sequencer>()
+                    {
+                        seq.set_waveform(waveform_from_u32(waveform));
+                    }
+                }
+            }
+        }
+        if snap.tracks.len() < self.tracks.len() {
+            self.tracks.truncate(snap.tracks.len());
         }
     }
 
@@ -27,6 +77,49 @@ impl Engine {
     pub fn set_playing(&mut self, on: bool) {
         for t in self.tracks.iter_mut() {
             t.instrument.set_playing(on);
+        }
+    }
+
+    pub fn apply_event(&mut self, ev: Event) {
+        match ev {
+            Event::Transport { play } => self.set_playing(play),
+            Event::SetTrackGain { track, gain } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.gain = gain;
+                }
+            }
+            Event::SetTrackPan { track, pan } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.pan = pan;
+                }
+            }
+            Event::SetTrackMute { track, mute } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.mute = mute;
+                }
+            }
+            Event::SetTrackSolo { track, solo } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.solo = solo;
+                }
+            }
+            Event::SetMasterGain { gain } => self.master_gain = gain,
+        }
+    }
+
+    /// Drain every event in `ring` and apply it. Called once at the top
+    /// of every audio block.
+    pub fn drain_events(&mut self, ring: &mut RingReader) {
+        // Buffer drained events first so we can iterate without holding a
+        // borrow on the ring while we mutate self.
+        let mut events: alloc::vec::Vec<Event> = alloc::vec::Vec::new();
+        ring.drain(|bytes| {
+            if let Ok(ev) = crate::event::decode(bytes) {
+                events.push(ev);
+            }
+        });
+        for ev in events {
+            self.apply_event(ev);
         }
     }
 
@@ -79,9 +172,40 @@ impl Engine {
     }
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new()
+fn instrument_matches(track: &TrackEngine, instrument: &InstrumentSnapshot) -> bool {
+    match instrument {
+        InstrumentSnapshot::BuiltinSequencer { .. } => track
+            .instrument
+            .voice_count_hint()
+            .is_some(),
+        InstrumentSnapshot::None => track.instrument.voice_count_hint().is_none(),
+    }
+}
+
+fn build_track(sample_rate: f32, ts: &crate::snapshot::TrackSnapshot) -> TrackEngine {
+    let instrument: Box<dyn crate::plugin::Plugin> = match ts.instrument {
+        InstrumentSnapshot::BuiltinSequencer { waveform } => {
+            let mut seq = Sequencer::new(sample_rate);
+            seq.set_waveform(waveform_from_u32(waveform));
+            Box::new(seq)
+        }
+        InstrumentSnapshot::None => Box::new(crate::plugin::Silence),
+    };
+    let mut track = TrackEngine::new(instrument);
+    track.gain = ts.gain;
+    track.pan = ts.pan;
+    track.mute = ts.mute;
+    track.solo = ts.solo;
+    track.voices = ts.voices;
+    track.kind = ts.kind;
+    track
+}
+
+fn waveform_from_u32(w: u32) -> Waveform {
+    match w {
+        1 => Waveform::Saw,
+        2 => Waveform::Square,
+        _ => Waveform::Sine,
     }
 }
 
@@ -89,6 +213,7 @@ impl Default for Engine {
 mod tests {
     use super::*;
     use crate::plugin::Plugin;
+    use crate::snapshot::{TrackKind, TrackSnapshot};
     use core::f32::consts::FRAC_1_SQRT_2;
 
     struct ConstSource {
@@ -122,7 +247,7 @@ mod tests {
 
     #[test]
     fn empty_engine_renders_silence() {
-        let mut e = Engine::new();
+        let mut e = Engine::new(48_000.0);
         let mut l = [1.0f32; 8];
         let mut r = [1.0f32; 8];
         e.process_stereo(&mut l, &mut r);
@@ -132,7 +257,7 @@ mod tests {
 
     #[test]
     fn two_tracks_sum_into_master() {
-        let mut e = Engine::new();
+        let mut e = Engine::new(48_000.0);
         e.add_track(const_track(0.3));
         e.add_track(const_track(0.4));
         e.set_playing(true);
@@ -150,7 +275,7 @@ mod tests {
 
     #[test]
     fn mute_drops_a_track_from_the_mix() {
-        let mut e = Engine::new();
+        let mut e = Engine::new(48_000.0);
         e.add_track(const_track(0.3));
         let mut t1 = const_track(0.4);
         t1.mute = true;
@@ -168,7 +293,7 @@ mod tests {
 
     #[test]
     fn solo_isolates_a_single_track() {
-        let mut e = Engine::new();
+        let mut e = Engine::new(48_000.0);
         let mut t0 = const_track(0.3);
         t0.solo = true;
         e.add_track(t0);
@@ -186,7 +311,7 @@ mod tests {
 
     #[test]
     fn solo_overrides_mute_for_the_soloed_track() {
-        let mut e = Engine::new();
+        let mut e = Engine::new(48_000.0);
         let mut t0 = const_track(0.3);
         t0.solo = true;
         t0.mute = true;
@@ -205,8 +330,142 @@ mod tests {
     }
 
     #[test]
+    fn apply_snapshot_seeds_tracks_with_correct_mixer_state() {
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 0.5,
+            tracks: vec![
+                TrackSnapshot {
+                    kind: TrackKind::Midi,
+                    name: "Drums".into(),
+                    gain: 0.8,
+                    pan: -0.3,
+                    mute: false,
+                    solo: false,
+                    voices: 12,
+                    instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 1 },
+                },
+                TrackSnapshot {
+                    kind: TrackKind::Midi,
+                    name: "Bass".into(),
+                    gain: 0.6,
+                    pan: 0.2,
+                    mute: true,
+                    solo: false,
+                    voices: 16,
+                    instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                },
+            ],
+        };
+        e.apply_snapshot(&snap);
+        assert_eq!(e.tracks.len(), 2);
+        assert!((e.master_gain - 0.5).abs() < 1e-6);
+        assert!((e.tracks[0].gain - 0.8).abs() < 1e-6);
+        assert!((e.tracks[0].pan - (-0.3)).abs() < 1e-6);
+        assert_eq!(e.tracks[0].voices, 12);
+        assert!(e.tracks[1].mute);
+    }
+
+    #[test]
+    fn apply_snapshot_preserves_instrument_when_kind_matches() {
+        let mut e = Engine::new(48_000.0);
+        let mut snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "T".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+            }],
+        };
+        e.apply_snapshot(&snap);
+        let original = e.tracks[0]
+            .instrument
+            .as_any_mut()
+            .downcast_mut::<Sequencer>()
+            .expect("seq instrument") as *mut Sequencer as usize;
+
+        // A mute toggle is a cosmetic change; the instrument should be reused.
+        snap.tracks[0].mute = true;
+        e.apply_snapshot(&snap);
+        let after = e.tracks[0]
+            .instrument
+            .as_any_mut()
+            .downcast_mut::<Sequencer>()
+            .expect("seq instrument") as *mut Sequencer as usize;
+        assert_eq!(original, after, "instrument was rebuilt on cosmetic change");
+        assert!(e.tracks[0].mute);
+    }
+
+    #[test]
+    fn drain_events_applies_set_track_gain() {
+        let mut e = Engine::new(48_000.0);
+        e.add_track(const_track(0.5));
+        assert!((e.tracks[0].gain - 1.0).abs() < 1e-6);
+
+        let mut buf = alloc::vec![0u8; crate::sab_ring::HEADER_BYTES + 64];
+        crate::sab_ring::init(&mut buf);
+        {
+            let mut w = crate::sab_ring::RingWriter::new(&mut buf);
+            let payload = crate::event::encode(&Event::SetTrackGain { track: 0, gain: 0.25 })
+                .expect("encode");
+            assert!(w.write(&payload));
+        }
+        let mut r = crate::sab_ring::RingReader::new(&mut buf);
+        e.drain_events(&mut r);
+        assert!((e.tracks[0].gain - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn drain_events_applies_transport() {
+        let mut e = Engine::new(48_000.0);
+        let seq = Sequencer::new(48_000.0);
+        e.add_track(TrackEngine::new(Box::new(seq)));
+
+        let mut buf = alloc::vec![0u8; crate::sab_ring::HEADER_BYTES + 64];
+        crate::sab_ring::init(&mut buf);
+        {
+            let mut w = crate::sab_ring::RingWriter::new(&mut buf);
+            let payload = crate::event::encode(&Event::Transport { play: true }).expect("encode");
+            assert!(w.write(&payload));
+        }
+        let mut r = crate::sab_ring::RingReader::new(&mut buf);
+        e.drain_events(&mut r);
+        let seq = e.tracks[0]
+            .instrument
+            .as_any_mut()
+            .downcast_mut::<Sequencer>()
+            .expect("seq");
+        assert_eq!(seq.current_step(), 0, "transport play not applied");
+    }
+
+    #[test]
+    fn apply_snapshot_round_trips_through_postcard() {
+        let snap = ProjectSnapshot {
+            master_gain: 0.75,
+            tracks: vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Lead".into(),
+                gain: 0.9,
+                pan: 0.0,
+                mute: false,
+                solo: true,
+                voices: 8,
+                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 2 },
+            }],
+        };
+        let bytes = crate::snapshot::encode(&snap);
+        let decoded = crate::snapshot::decode(&bytes).expect("decode");
+        assert_eq!(snap, decoded);
+    }
+
+    #[test]
     fn master_gain_scales_the_bus() {
-        let mut e = Engine::new();
+        let mut e = Engine::new(48_000.0);
         e.add_track(const_track(0.5));
         e.master_gain = 0.5;
         e.set_playing(true);

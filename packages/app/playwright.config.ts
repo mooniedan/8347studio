@@ -12,7 +12,16 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // Headless Chrome suspends AudioContext until a user gesture
+        // (autoplay policy). Tests need the audio thread running so the
+        // SAB event ring is drained — bypass the policy.
+        launchOptions: { args: ['--autoplay-policy=no-user-gesture-required'] },
+      },
+    },
   ],
   webServer: {
     command: 'pnpm dev',

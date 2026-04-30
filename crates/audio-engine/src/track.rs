@@ -1,9 +1,11 @@
 use crate::plugin::Plugin;
+use crate::snapshot::TrackKind;
 
 pub const DEFAULT_VOICES: u32 = 16;
 
 pub struct TrackEngine {
     pub instrument: Box<dyn Plugin>,
+    pub kind: TrackKind,
     pub gain: f32,
     pub pan: f32, // -1.0 = full L, 0.0 = center, 1.0 = full R
     pub mute: bool,
@@ -17,6 +19,7 @@ impl TrackEngine {
         let voices = instrument.voice_count_hint().unwrap_or(DEFAULT_VOICES);
         Self {
             instrument,
+            kind: TrackKind::Midi,
             gain: 1.0,
             pan: 0.0,
             mute: false,

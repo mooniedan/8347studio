@@ -1,20 +1,23 @@
 use audio_engine::engine::Engine;
+use audio_engine::event;
 use audio_engine::oscillator::Waveform;
 use audio_engine::sequencer::Sequencer;
+use audio_engine::snapshot;
 use audio_engine::track::TrackEngine;
 use core::slice;
 
 static mut ENGINE: Option<Engine> = None;
+/// Reusable scratch for incoming `RebuildProject` payloads — one
+/// allocation that grows on demand, no per-rebuild leak.
+static mut SNAP_BUF: Option<Vec<u8>> = None;
+/// Reusable scratch for inbound SAB events (one event at a time).
+static mut EVENT_BUF: Option<Vec<u8>> = None;
 
 #[allow(static_mut_refs)]
 unsafe fn engine() -> &'static mut Engine {
     ENGINE.as_mut().expect("init not called")
 }
 
-/// M2 ships a single MIDI track at index 0 wrapping the existing step
-/// sequencer. M3+ will let the host add/remove tracks through the
-/// structural channel; for now the legacy single-track UI keeps working
-/// because every export below routes to track 0.
 unsafe fn seq0() -> &'static mut Sequencer {
     let track = engine()
         .track_mut(0)
@@ -28,7 +31,7 @@ unsafe fn seq0() -> &'static mut Sequencer {
 
 #[no_mangle]
 pub extern "C" fn init(sample_rate: f32) {
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(sample_rate);
     let seq = Sequencer::new(sample_rate);
     engine.add_track(TrackEngine::new(Box::new(seq)));
     unsafe {
@@ -37,11 +40,76 @@ pub extern "C" fn init(sample_rate: f32) {
 }
 
 #[no_mangle]
-pub extern "C" fn alloc(len: usize) -> *mut f32 {
-    let mut v = Vec::<f32>::with_capacity(len);
+pub extern "C" fn alloc(len: usize) -> *mut u8 {
+    let mut v = Vec::<u8>::with_capacity(len);
     let ptr = v.as_mut_ptr();
     core::mem::forget(v);
     ptr
+}
+
+/// Reserve `len` bytes in the snapshot scratch buffer and return a
+/// pointer the JS side can write into. Followed by `rebuild_project(len)`.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn snapshot_buffer_reserve(len: usize) -> *mut u8 {
+    unsafe {
+        let buf = SNAP_BUF.get_or_insert_with(Vec::new);
+        if buf.capacity() < len {
+            buf.reserve(len - buf.capacity());
+        }
+        buf.clear();
+        buf.resize(len, 0);
+        buf.as_mut_ptr()
+    }
+}
+
+/// Reserve `len` bytes in the event scratch buffer and return a pointer
+/// the JS worklet can write a single SAB event into. Followed by
+/// `apply_event(len)`. The worklet drains its SAB ring and calls this
+/// once per event — kept simple to avoid teaching wasm to own SAB views.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn event_buffer_reserve(len: usize) -> *mut u8 {
+    unsafe {
+        let buf = EVENT_BUF.get_or_insert_with(Vec::new);
+        if buf.capacity() < len {
+            buf.reserve(len - buf.capacity());
+        }
+        buf.clear();
+        buf.resize(len, 0);
+        buf.as_mut_ptr()
+    }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn apply_event(len: usize) {
+    unsafe {
+        if let Some(buf) = EVENT_BUF.as_ref() {
+            let bytes = &buf[..len.min(buf.len())];
+            if let Ok(ev) = event::decode(bytes) {
+                engine().apply_event(ev);
+            }
+        }
+    }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn rebuild_project(len: usize) {
+    unsafe {
+        if let Some(buf) = SNAP_BUF.as_ref() {
+            let bytes = &buf[..len.min(buf.len())];
+            match snapshot::decode(bytes) {
+                Ok(snap) => engine().apply_snapshot(&snap),
+                Err(_) => {
+                    // Snapshot decode failures are swallowed on the audio
+                    // thread to avoid panics; the JS side validates before
+                    // posting. M9 will add telemetry.
+                }
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -51,6 +119,11 @@ pub extern "C" fn process(ptr: *mut f32, len: usize) {
         engine().process_mono(buf);
     }
 }
+
+// ---- Legacy single-track exports (Phase-0/1 UI back-compat) -----------
+//
+// M5 deletes these in favour of structural rebuilds. Until then, they
+// route to track 0 so the existing Svelte UI keeps working.
 
 #[no_mangle]
 pub extern "C" fn set_step_mask(i: u32, mask: u32) {
@@ -64,8 +137,6 @@ pub extern "C" fn set_bpm(bpm: f32) {
 
 #[no_mangle]
 pub extern "C" fn set_playing(on: u32) {
-    // Route through Engine so transport state propagates to every track
-    // (only one in M2, but the wiring is right for M3+).
     unsafe { engine().set_playing(on != 0) }
 }
 
@@ -82,4 +153,27 @@ pub extern "C" fn set_waveform(w: u32) {
         _ => Waveform::Sine,
     };
     unsafe { seq0().set_waveform(waveform) }
+}
+
+// ---- Debug exports for e2e tests --------------------------------------
+
+#[no_mangle]
+pub extern "C" fn debug_track_gain(idx: u32) -> f32 {
+    unsafe {
+        engine()
+            .tracks
+            .get(idx as usize)
+            .map(|t| t.gain)
+            .unwrap_or(f32::NAN)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn debug_master_gain() -> f32 {
+    unsafe { engine().master_gain }
+}
+
+#[no_mangle]
+pub extern "C" fn debug_track_count() -> u32 {
+    unsafe { engine().tracks.len() as u32 }
 }
