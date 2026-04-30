@@ -211,6 +211,32 @@ function instrumentSnapshotBytes(track: Y.Map<unknown>): Uint8Array {
   return concat([new Uint8Array([INSTR_BUILTIN_SEQ]), u32VarintToBytes(code)]);
 }
 
+function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
+  if (track.get('kind') !== 'MIDI') {
+    return u32VarintToBytes(0);
+  }
+  const clipIds = track.get('clips') as Y.Array<string> | undefined;
+  if (!clipIds || clipIds.length === 0) {
+    return u32VarintToBytes(0);
+  }
+  const clipId = clipIds.get(0);
+  const clip = project.clipById.get(clipId);
+  if (!clip || clip.get('kind') !== 'StepSeq') {
+    return u32VarintToBytes(0);
+  }
+  const steps = clip.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!steps) return u32VarintToBytes(0);
+  const masks: number[] = [];
+  for (const cell of steps.toArray()) {
+    masks.push(((cell.get('notes') as number) ?? 0) >>> 0);
+  }
+  const parts: Uint8Array[] = [u32VarintToBytes(masks.length)];
+  for (const m of masks) {
+    parts.push(u32VarintToBytes(m));
+  }
+  return concat(parts);
+}
+
 export function buildSnapshot(project: Project): Uint8Array {
   const masterGain = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
   const trackBytes: Uint8Array[] = [];
@@ -234,6 +260,7 @@ export function buildSnapshot(project: Project): Uint8Array {
         new Uint8Array([mute ? 1 : 0, solo ? 1 : 0]),
         u32VarintToBytes(voices),
         instrumentSnapshotBytes(track),
+        stepBytesForTrack(project, track),
       ]),
     );
   }
@@ -294,6 +321,14 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   };
   project.tracks.observeDeep(onStructural);
   project.trackById.observeDeep(onStructural);
+  // Clip add/remove triggers a rebuild so the engine sees the new step
+  // pattern. Single (non-deep) observe — we only care about key adds /
+  // deletes on clipById, not nested edits (those go via the track's
+  // clip.observeDeep inside Sequencer.svelte).
+  const onClipChange = (ev: Y.YMapEvent<Y.Map<unknown>>) => {
+    if (ev.changes.keys.size > 0) rebuild();
+  };
+  project.clipById.observe(onClipChange);
 
   const onTempoChange = () => {
     const bpm = projectBpm(project);
@@ -335,6 +370,7 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
       project.tracks.unobserveDeep(onStructural);
       project.trackById.unobserveDeep(onStructural);
       project.tempoMap.unobserveDeep(onTempoChange);
+      project.clipById.unobserve(onClipChange);
     },
   };
 }

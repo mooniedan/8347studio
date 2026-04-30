@@ -124,6 +124,8 @@ function defaultEmptySteps(): number[] {
   return Array<number>(STEPS_PER_CLIP).fill(0);
 }
 
+const TRACK_PALETTE = ['#ff8c00', '#3aa9ff', '#7cd64a', '#e34dff', '#ffd84a', '#ff5c8a'];
+
 function createMidiTrack(p: Project, waveform: Waveform): { trackId: string } {
   const trackId = makeId('track');
   const track = new Y.Map<unknown>();
@@ -136,9 +138,10 @@ function createMidiTrack(p: Project, waveform: Waveform): { trackId: string } {
   instr.set('voices', 16);
   instr.set('params', params);
 
+  const idx = p.tracks.length;
   track.set('kind', 'MIDI');
-  track.set('name', 'Track 1');
-  track.set('color', '#ff8c00');
+  track.set('name', `Track ${idx + 1}`);
+  track.set('color', TRACK_PALETTE[idx % TRACK_PALETTE.length]);
   track.set('mute', false);
   track.set('solo', false);
   track.set('gain', 1.0);
@@ -224,6 +227,56 @@ function clearLegacyHash(): void {
 }
 
 // ---- Read/write helpers (Phase-1 single-clip view) -----------------------
+
+export function addMidiTrack(p: Project, waveform: Waveform = 'sine'): string {
+  let trackId = '';
+  p.doc.transact(() => {
+    const r = createMidiTrack(p, waveform);
+    trackId = r.trackId;
+    createStepSeqClip(p, r.trackId, defaultEmptySteps());
+  });
+  return trackId;
+}
+
+export function removeTrack(p: Project, idx: number): void {
+  if (idx < 0 || idx >= p.tracks.length) return;
+  p.doc.transact(() => {
+    const id = p.tracks.get(idx);
+    const track = p.trackById.get(id);
+    const clipIds = (track?.get('clips') as Y.Array<string> | undefined)?.toArray() ?? [];
+    p.tracks.delete(idx, 1);
+    p.trackById.delete(id);
+    for (const cid of clipIds) {
+      p.clipById.delete(cid);
+    }
+  });
+}
+
+export function getStepSeqClipForTrack(p: Project, idx: number): Y.Map<unknown> | null {
+  if (idx < 0 || idx >= p.tracks.length) return null;
+  const id = p.tracks.get(idx);
+  const track = p.trackById.get(id);
+  if (!track || track.get('kind') !== 'MIDI') return null;
+  const clipIds = track.get('clips') as Y.Array<string> | undefined;
+  if (!clipIds || clipIds.length === 0) return null;
+  const clip = p.clipById.get(clipIds.get(0));
+  if (!clip || clip.get('kind') !== 'StepSeq') return null;
+  return clip;
+}
+
+export function getTrackName(p: Project, idx: number): string {
+  if (idx < 0 || idx >= p.tracks.length) return '';
+  const id = p.tracks.get(idx);
+  const track = p.trackById.get(id);
+  return ((track?.get('name') as string | undefined) ?? '');
+}
+
+export function getTrackColor(p: Project, idx: number): string {
+  if (idx < 0 || idx >= p.tracks.length) return '#888';
+  const id = p.tracks.get(idx);
+  const track = p.trackById.get(id);
+  return ((track?.get('color') as string | undefined) ?? '#888');
+}
 
 export function getFirstStepSeqClip(p: Project): Y.Map<unknown> | null {
   for (const id of p.tracks.toArray()) {

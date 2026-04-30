@@ -25,6 +25,9 @@ pub struct TrackSnapshot {
     pub solo: bool,
     pub voices: u32,
     pub instrument: InstrumentSnapshot,
+    /// Per-step bitmask for the track's first StepSeq clip (Phase 1
+    /// only ever has one). Empty when the track has no step clip.
+    pub steps: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

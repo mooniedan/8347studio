@@ -18,15 +18,12 @@ unsafe fn engine() -> &'static mut Engine {
     ENGINE.as_mut().expect("init not called")
 }
 
-unsafe fn seq0() -> &'static mut Sequencer {
-    let track = engine()
-        .track_mut(0)
-        .expect("track 0 missing — init not called");
-    track
-        .instrument
-        .as_any_mut()
-        .downcast_mut::<Sequencer>()
-        .expect("track 0 instrument is not a Sequencer")
+fn seq_at(track_idx: u32) -> Option<&'static mut Sequencer> {
+    unsafe {
+        engine()
+            .track_mut(track_idx as usize)
+            .and_then(|t| t.instrument.as_any_mut().downcast_mut::<Sequencer>())
+    }
 }
 
 #[no_mangle]
@@ -126,8 +123,10 @@ pub extern "C" fn process(ptr: *mut f32, len: usize) {
 // route to track 0 so the existing Svelte UI keeps working.
 
 #[no_mangle]
-pub extern "C" fn set_step_mask(i: u32, mask: u32) {
-    unsafe { seq0().set_step_mask(i, mask) }
+pub extern "C" fn set_step_mask(track: u32, i: u32, mask: u32) {
+    if let Some(seq) = seq_at(track) {
+        seq.set_step_mask(i, mask);
+    }
 }
 
 #[no_mangle]
@@ -137,17 +136,19 @@ pub extern "C" fn set_playing(on: u32) {
 
 #[no_mangle]
 pub extern "C" fn get_current_step() -> i32 {
-    unsafe { seq0().current_step() }
+    seq_at(0).map(|s| s.current_step()).unwrap_or(-1)
 }
 
 #[no_mangle]
-pub extern "C" fn set_waveform(w: u32) {
+pub extern "C" fn set_waveform(track: u32, w: u32) {
     let waveform = match w {
         1 => Waveform::Saw,
         2 => Waveform::Square,
         _ => Waveform::Sine,
     };
-    unsafe { seq0().set_waveform(waveform) }
+    if let Some(seq) = seq_at(track) {
+        seq.set_waveform(waveform);
+    }
 }
 
 // ---- Debug exports for e2e tests --------------------------------------

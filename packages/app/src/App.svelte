@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import Sequencer from './lib/Sequencer.svelte';
+  import TrackList from './lib/TrackList.svelte';
   import { createProject, type Project } from './lib/project';
   import * as audio from './lib/audio';
   import { attachBridge, type Bridge } from './lib/engine-bridge';
@@ -10,13 +11,11 @@
   // just-restored doc.
   let project = $state<Project | null>(null);
   let bridge = $state<Bridge | null>(null);
+  let selectedTrackIdx = $state(0);
 
   const ready = createProject().then(async (p) => {
     project = p;
     exposeDebugHandle(p);
-    // Attach the engine bridge eagerly so SAB writes (gain etc.) queue
-    // even before the user clicks play; the worklet drains them once
-    // the audio thread starts.
     const { ring } = await audio.ensureReady();
     bridge = attachBridge(p, { ring, postRebuild: audio.postRebuild });
     exposeBridgeHandle(bridge);
@@ -67,11 +66,39 @@
   <p class="loading">loading…</p>
 {:then}
   {#if project && bridge}
-    <Sequencer {project} {bridge} />
+    <h1>8347 Studio</h1>
+    <div class="layout">
+      <TrackList
+        {project}
+        selectedIdx={selectedTrackIdx}
+        onSelect={(i) => (selectedTrackIdx = i)}
+      />
+      <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
+    </div>
   {/if}
 {/await}
 
 <style>
+  :global(body) {
+    background: #0d0d0d;
+    color: #ddd;
+    margin: 0;
+  }
+  h1 {
+    font-family: system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ccc;
+    padding: 8px 16px;
+    margin: 0;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
   .loading {
     font-family: system-ui, sans-serif;
     color: #888;

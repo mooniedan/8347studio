@@ -5,7 +5,7 @@
     LOW_MIDI,
     STEPS_PER_CLIP,
     WAVEFORMS,
-    getFirstStepSeqClip,
+    getStepSeqClipForTrack,
     readSteps,
     writeStepNotes,
     getBpm,
@@ -19,7 +19,11 @@
   } from './project';
   import type { Bridge } from './engine-bridge';
 
-  const { project, bridge }: { project: Project; bridge: Bridge } = $props();
+  const {
+    project,
+    bridge,
+    trackIdx,
+  }: { project: Project; bridge: Bridge; trackIdx: number } = $props();
 
   const HIGH = 72; // C5 inclusive
   const NOTES = HIGH - LOW_MIDI + 1; // 25 rows
@@ -32,50 +36,63 @@
   const bitFor = (midi: number) => 1 << (midi - LOW_MIDI);
   const hasNote = (mask: number, midi: number) => ((mask >>> (midi - LOW_MIDI)) & 1) === 1;
 
-  // Mirror Y.Doc state into reactive Svelte state. The Y.Doc remains the
-  // source of truth; we resync on every observed change.
-  let steps = $state<number[]>(untrack(() => readSteps(getFirstStepSeqClip(project)!)));
+  // Mirror Y.Doc state into reactive Svelte state, scoped to the
+  // currently selected track. Resync on every observed change AND
+  // when trackIdx changes.
+  let steps = $state<number[]>(untrack(() => readClipSteps()));
   let bpm = $state(untrack(() => getBpm(project)));
   let waveform = $state<Waveform>(untrack(() => getWaveform(project)));
-  let trackGain = $state(untrack(() => getTrackGain(project, 0)));
+  let trackGain = $state(untrack(() => getTrackGain(project, trackIdx)));
   let playing = $state(false);
   let playhead = $state(-1);
 
-  onMount(() => {
-    const clip = getFirstStepSeqClip(project)!;
-    const observer = () => { steps = readSteps(clip); };
-    clip.observeDeep(observer);
+  function readClipSteps(): number[] {
+    const clip = getStepSeqClipForTrack(project, trackIdx);
+    return clip ? readSteps(clip) : Array<number>(STEPS_PER_CLIP).fill(0);
+  }
 
-    const tempoObserver = () => { bpm = getBpm(project); };
-    project.tempoMap.observeDeep(tempoObserver);
+  // (Re-)attach observers whenever the visible track changes.
+  $effect(() => {
+    const idx = trackIdx;
+    const clip = getStepSeqClipForTrack(project, idx);
+    if (!clip) return;
+    steps = readSteps(clip);
+    trackGain = getTrackGain(project, idx);
+
+    const stepObserver = () => { steps = readSteps(clip); };
+    clip.observeDeep(stepObserver);
 
     const trackObserver = () => {
       waveform = getWaveform(project);
-      const next = getTrackGain(project, 0);
+      const next = getTrackGain(project, idx);
       if (next !== trackGain) {
         trackGain = next;
-        bridge.setTrackGain(0, next);
+        bridge.setTrackGain(idx, next);
       }
     };
     project.trackById.observeDeep(trackObserver);
 
-    // Push full pattern to audio engine once ready.
-    for (let i = 0; i < STEPS_PER_CLIP; i++) void audio.setStepMask(i, steps[i]);
-    audio.onStep((s) => { playhead = s; });
-
     return () => {
-      clip.unobserveDeep(observer);
-      project.tempoMap.unobserveDeep(tempoObserver);
+      clip.unobserveDeep(stepObserver);
       project.trackById.unobserveDeep(trackObserver);
     };
   });
 
+  onMount(() => {
+    const tempoObserver = () => { bpm = getBpm(project); };
+    project.tempoMap.observeDeep(tempoObserver);
+    audio.onStep((s) => { playhead = s; });
+    return () => {
+      project.tempoMap.unobserveDeep(tempoObserver);
+    };
+  });
+
   function setCell(col: number, midi: number) {
-    const clip = getFirstStepSeqClip(project);
+    const clip = getStepSeqClipForTrack(project, trackIdx);
     if (!clip) return;
     const next = (steps[col] ^ bitFor(midi)) >>> 0;
     writeStepNotes(clip, col, next);
-    void audio.setStepMask(col, next);
+    void audio.setStepMask(trackIdx, col, next);
   }
 
   async function togglePlay() {
@@ -83,9 +100,17 @@
       await audio.stop();
       playing = false;
     } else {
-      for (let i = 0; i < STEPS_PER_CLIP; i++) await audio.setStepMask(i, steps[i]);
-      // BPM already flows to the engine via the SAB ring (engine-bridge
-      // observes Y.Doc.tempoMap → SetBpm event).
+      // Push *every* track's pattern before starting so freshly-added
+      // tracks start in sync without waiting for the next snapshot
+      // rebuild to land.
+      for (let t = 0; t < project.tracks.length; t++) {
+        const c = getStepSeqClipForTrack(project, t);
+        if (!c) continue;
+        const masks = readSteps(c);
+        for (let i = 0; i < STEPS_PER_CLIP; i++) {
+          await audio.setStepMask(t, i, masks[i]);
+        }
+      }
       await audio.play();
       playing = true;
     }
@@ -103,10 +128,10 @@
 
   function onTrackGainInput(e: Event) {
     const v = Number((e.target as HTMLInputElement).value);
-    if (Number.isFinite(v)) setTrackGain(project, 0, Math.max(0, Math.min(1, v)));
+    if (Number.isFinite(v)) setTrackGain(project, trackIdx, Math.max(0, Math.min(1, v)));
   }
 
-  $effect(() => { void audio.setWaveform(waveform); });
+  $effect(() => { void audio.setWaveform(trackIdx, waveform); });
 
   // Poll the engine's current_tick while playing so the transport
   // counter stays live.
@@ -129,8 +154,6 @@
 </script>
 
 <div class="wrap">
-  <h1>wasm daw</h1>
-
   <div class="controls">
     <button class="play" onclick={togglePlay}>{playing ? 'stop' : 'play'}</button>
     <label>bpm <input type="number" min="20" max="300" value={bpm} oninput={onBpmInput} /></label>
@@ -162,7 +185,7 @@
         <div class="key" class:black={isBlack(midi)}>{name(midi)}</div>
       {/each}
     </div>
-    <div class="grid" style="grid-template-rows: repeat({NOTES}, 1fr); grid-template-columns: repeat({STEPS_PER_CLIP}, 1fr);">
+    <div class="grid" data-testid={`grid-${trackIdx}`} style="grid-template-rows: repeat({NOTES}, 1fr); grid-template-columns: repeat({STEPS_PER_CLIP}, 1fr);">
       {#each rows as midi, r}
         {#each Array(STEPS_PER_CLIP) as _, c}
           <button
@@ -179,21 +202,22 @@
       {/each}
     </div>
   </div>
-
-  <p class="hint">click cells to toggle notes — stack multiple notes per column for chords.</p>
 </div>
 
 <style>
   .wrap {
     font-family: system-ui, sans-serif;
-    padding: 16px;
     color: #ddd;
   }
-  h1 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
-  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
   .controls label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
   .controls input, .controls select { font: inherit; padding: 2px 4px; }
   button.play { padding: 4px 12px; }
+  .gain-readout, .tick-readout {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: #888;
+  }
 
   .roll { display: grid; grid-template-columns: 32px 1fr; gap: 4px; }
   .keys { display: grid; grid-auto-rows: 1fr; }

@@ -90,9 +90,9 @@ class DawProcessor extends AudioWorkletProcessor {
       }
       this.port.postMessage({ type: 'debug-reply', id: msg.id, what: msg.what, value });
     } else if (msg.type === 'setStepMask') {
-      this.exports.set_step_mask(msg.i >>> 0, msg.mask >>> 0);
+      this.exports.set_step_mask(msg.track >>> 0, msg.i >>> 0, msg.mask >>> 0);
     } else if (msg.type === 'setWaveform') {
-      this.exports.set_waveform(msg.w >>> 0);
+      this.exports.set_waveform(msg.track >>> 0, msg.w >>> 0);
     } else if (msg.type === 'setPlaying') {
       this.exports.set_playing(msg.on ? 1 : 0);
     }

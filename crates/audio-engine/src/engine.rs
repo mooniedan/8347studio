@@ -43,9 +43,8 @@ impl Engine {
     pub fn apply_snapshot(&mut self, snap: &ProjectSnapshot) {
         self.master_gain = snap.master_gain;
 
-        let same_count = snap.tracks.len() == self.tracks.len();
         for (i, ts) in snap.tracks.iter().enumerate() {
-            let needs_rebuild = !same_count
+            let needs_rebuild = i >= self.tracks.len()
                 || self.tracks[i].voices != ts.voices
                 || !instrument_matches(&self.tracks[i], &ts.instrument);
             if needs_rebuild {
@@ -68,6 +67,21 @@ impl Engine {
                         .downcast_mut::<Sequencer>()
                     {
                         seq.set_waveform(waveform_from_u32(waveform));
+                    }
+                }
+            }
+            // Route per-clip step pattern (if any) into the track's
+            // sequencer. Empty Vec means "no step clip / leave untouched"
+            // for tracks like buses; non-empty means "this is the
+            // canonical pattern" so it overwrites whatever was there.
+            if !ts.steps.is_empty() {
+                if let Some(seq) = self.tracks[i]
+                    .instrument
+                    .as_any_mut()
+                    .downcast_mut::<Sequencer>()
+                {
+                    for (step_idx, mask) in ts.steps.iter().enumerate() {
+                        seq.set_step_mask(step_idx as u32, *mask);
                     }
                 }
             }
@@ -388,6 +402,7 @@ mod tests {
                     solo: false,
                     voices: 12,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 1 },
+                steps: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -398,6 +413,7 @@ mod tests {
                     solo: false,
                     voices: 16,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                steps: alloc::vec![],
                 },
             ],
         };
@@ -424,6 +440,7 @@ mod tests {
                 solo: false,
                 voices: 16,
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                steps: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -556,6 +573,51 @@ mod tests {
     }
 
     #[test]
+    fn apply_snapshot_routes_clip_steps_into_track_sequencer() {
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Drums".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                steps: alloc::vec![
+                    1u32 << 12,
+                    0,
+                    0,
+                    0,
+                    1u32 << 16,
+                    0,
+                    0,
+                    0,
+                    1u32 << 12,
+                    0,
+                    0,
+                    0,
+                    1u32 << 16,
+                    0,
+                    0,
+                    0
+                ],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.set_playing(true);
+        // Render enough samples to cross the first step boundary so a
+        // voice triggers, then verify audio is non-silent — proves the
+        // step pattern landed.
+        let mut buf = alloc::vec![0.0f32; 6_000];
+        e.process_mono(&mut buf);
+        let peak = buf.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.01, "no audio after applying clip steps; peak {peak}");
+    }
+
+    #[test]
     fn apply_snapshot_round_trips_through_postcard() {
         let snap = ProjectSnapshot {
             master_gain: 0.75,
@@ -568,6 +630,7 @@ mod tests {
                 solo: true,
                 voices: 8,
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 2 },
+                steps: alloc::vec![],
             }],
         };
         let bytes = crate::snapshot::encode(&snap);

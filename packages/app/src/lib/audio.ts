@@ -74,14 +74,14 @@ export async function stop(): Promise<void> {
   node.port.postMessage({ type: 'setPlaying', on: false });
 }
 
-export async function setStepMask(i: number, mask: number): Promise<void> {
+export async function setStepMask(track: number, i: number, mask: number): Promise<void> {
   await ensureReady();
-  node!.port.postMessage({ type: 'setStepMask', i, mask });
+  node!.port.postMessage({ type: 'setStepMask', track, i, mask });
 }
 
-export async function setWaveform(w: Waveform): Promise<void> {
+export async function setWaveform(track: number, w: Waveform): Promise<void> {
   await ensureReady();
-  node!.port.postMessage({ type: 'setWaveform', w: WAVEFORM_CODE[w] });
+  node!.port.postMessage({ type: 'setWaveform', track, w: WAVEFORM_CODE[w] });
 }
 
 /// Test-only: ask the worklet to read a debug export from the wasm engine.
