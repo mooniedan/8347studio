@@ -3,9 +3,11 @@
 > **Name:** 8347 Studio ("Beat in L33T" — 8=B, 3=E, 4=A, 7=T).
 > GitHub: <https://github.com/mooniedan/8347studio>.
 
-This is the high-level phase map. Each phase is **capability-driven**:
-the headline is a verb the user can do. Each phase spans the full stack
-(engine, data model, UI). Per-phase milestones live in
+This is the high-level phase map and the canonical progress tracker —
+the ✓ column reflects current state; bump it when a phase's verification
+passes. Each phase is **capability-driven**: the "User can…" column is a
+verb the user can do at the end of the phase. Each phase spans the full
+stack (engine, data model, UI). Per-phase milestones live in
 `.claude/plans/phase-N-*.md`.
 
 The dream is `.claude/dream.md`. The architectural decisions that
@@ -25,18 +27,22 @@ ones in their own `## Designs` section.
 
 ## Phase map
 
-| Phase | Headline (user verb)                                                       | Core themes                                                                            |
-|------:|----------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| **0** | Make a single-track polyphonic beat. (existing POC)                        | Rust audio-engine, WASM bridge, AudioWorklet, Svelte UI, single oscillator + sequencer |
-| **1** | Make a *multi-track* beat with the step sequencer.                         | Yjs source-of-truth, multi-track engine, tempo, clip-based content model, basic mixer  |
-| **2** | Play a real synth with envelopes and a piano-roll part.                    | Plugin trait, first-party synth (subtractive, ADSR, filter), piano-roll clip, MIDI events |
-| **3** | Hook up a MIDI keyboard and play live.                                     | WebMIDI input, armed-track routing, live recording into clips, basic CC-learn          |
-| **4** | Shape the sound with effects, sends, and automation.                       | Insert FX chain, send buses, parameter automation lanes, first-party effects (EQ/comp/reverb/delay), container plugin |
-| **5** | Drag in a sample, record live audio over a beat.                           | Audio track type, audio clip + warp opt-in, OPFS asset store, getUserMedia recording   |
-| **6** | Control playback from a Picture-in-Picture window.                         | Document PIP transport, popup mixer, BroadcastChannel state sync, satellite render contract |
-| **7** | Load a third-party plugin from a URL.                                      | Public plugin SDK: WASM+JS contract, manifest format, sandbox boundary, registry list, example external plugin |
-| **8** | Make a beat with a friend in real time.                                    | y-websocket sync server, awareness (cursors + transport), shared session UI, cloud asset bucket (content-addressed) |
-| **9** | Polish: controller presets, automation curves, exports, perf, ecosystem.   | MIDI controller-map presets, advanced automation curves, project export bundle, plugin registry UX, performance pass |
+| ✓  | Phase | User can…                                                                | Core themes                                                                                                     |
+|:--:|------:|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| ✅ | **0** | Make a single-track polyphonic beat (existing POC).                      | Rust audio-engine, WASM bridge, AudioWorklet, Svelte UI, single oscillator + sequencer                          |
+| ✅ | **1** | Make a *multi-track* beat with the step sequencer.                       | Yjs source-of-truth, multi-track engine, tempo, clip-based content model, basic mixer                           |
+| ⬜ | **2** | Play a real synth with envelopes and write a piano-roll part.            | Plugin trait, first-party synth (subtractive, ADSR, filter), piano-roll clip, MIDI events                       |
+| ⬜ | **3** | Hook up a MIDI keyboard and play live.                                   | WebMIDI input, armed-track routing, live recording into clips, basic CC-learn                                   |
+| ⬜ | **4** | Shape the sound with effects, sends, and automation.                     | Insert FX chain, send buses, parameter automation lanes, first-party EQ/comp/reverb/delay, container plugin     |
+| ⬜ | **5** | Drag in a sample, record live audio over a beat.                         | Audio track type, audio clip + warp opt-in, OPFS asset store, getUserMedia recording                            |
+| ⬜ | **6** | Control playback from a Picture-in-Picture window.                       | Document PIP transport, popup mixer, BroadcastChannel state sync, satellite render contract                     |
+| ⬜ | **7** | Load a third-party plugin from a URL.                                    | Public plugin SDK: WASM+JS contract, manifest, sandbox boundary, registry list, example external plugin         |
+| ⬜ | **8** | Make a beat with a friend in real time.                                  | y-websocket sync server, awareness (cursors + transport), shared session UI, content-addressed cloud assets     |
+| ⬜ | **9** | Polish: controller presets, automation curves, exports, perf, ecosystem. | Controller-map presets, advanced automation curves, project export bundle, plugin registry UX, performance pass |
+
+> **Legend.** ✅ shipped · 🚧 in progress · ⬜ not started. Bump the box
+> when a phase's verification passes; per-milestone status lives in
+> `.claude/plans/phase-N-*.md`.
 
 Phases 0–5 establish the local-first single-user DAW. Phase 6 unlocks
 the multi-window workflow. Phase 7 publishes the SDK. Phase 8 flips the
