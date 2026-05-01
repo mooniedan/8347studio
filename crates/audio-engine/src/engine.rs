@@ -1,5 +1,7 @@
 use crate::event::Event;
 use crate::oscillator::Waveform;
+use crate::plugin::{Plugin, Silence};
+use crate::plugins::subtractive::Subtractive;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
 use crate::snapshot::{InstrumentSnapshot, ProjectSnapshot};
@@ -60,14 +62,28 @@ impl Engine {
                 track.pan = ts.pan;
                 track.mute = ts.mute;
                 track.solo = ts.solo;
-                if let InstrumentSnapshot::BuiltinSequencer { waveform } = ts.instrument {
-                    if let Some(seq) = track
-                        .instrument
-                        .as_any_mut()
-                        .downcast_mut::<Sequencer>()
-                    {
-                        seq.set_waveform(waveform_from_u32(waveform));
+                match &ts.instrument {
+                    InstrumentSnapshot::BuiltinSequencer { waveform } => {
+                        if let Some(seq) = track
+                            .instrument
+                            .as_any_mut()
+                            .downcast_mut::<Sequencer>()
+                        {
+                            seq.set_waveform(waveform_from_u32(*waveform));
+                        }
                     }
+                    InstrumentSnapshot::Subtractive { params } => {
+                        if let Some(s) = track
+                            .instrument
+                            .as_any_mut()
+                            .downcast_mut::<Subtractive>()
+                        {
+                            for &(id, value) in params {
+                                s.set_param(id, value);
+                            }
+                        }
+                    }
+                    InstrumentSnapshot::None => {}
                 }
             }
             // Route per-clip step pattern (if any) into the track's
@@ -152,6 +168,11 @@ impl Engine {
                 }
             }
             Event::SetMasterGain { gain } => self.master_gain = gain,
+            Event::SetParam { track, id, value } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.instrument.set_param(id, value);
+                }
+            }
         }
     }
 
@@ -231,23 +252,30 @@ impl Engine {
 }
 
 fn instrument_matches(track: &TrackEngine, instrument: &InstrumentSnapshot) -> bool {
+    let any = track.instrument.as_any();
     match instrument {
-        InstrumentSnapshot::BuiltinSequencer { .. } => track
-            .instrument
-            .voice_count_hint()
-            .is_some(),
-        InstrumentSnapshot::None => track.instrument.voice_count_hint().is_none(),
+        InstrumentSnapshot::BuiltinSequencer { .. } => any.is::<Sequencer>(),
+        InstrumentSnapshot::None => any.is::<Silence>(),
+        InstrumentSnapshot::Subtractive { .. } => any.is::<Subtractive>(),
     }
 }
 
 fn build_track(sample_rate: f32, ts: &crate::snapshot::TrackSnapshot) -> TrackEngine {
-    let instrument: Box<dyn crate::plugin::Plugin> = match ts.instrument {
+    let instrument: Box<dyn Plugin> = match &ts.instrument {
         InstrumentSnapshot::BuiltinSequencer { waveform } => {
             let mut seq = Sequencer::new(sample_rate);
-            seq.set_waveform(waveform_from_u32(waveform));
+            seq.set_waveform(waveform_from_u32(*waveform));
             Box::new(seq)
         }
-        InstrumentSnapshot::None => Box::new(crate::plugin::Silence),
+        InstrumentSnapshot::None => Box::new(Silence),
+        InstrumentSnapshot::Subtractive { params } => {
+            let mut s = Subtractive::new(sample_rate);
+            s.set_voice_count(ts.voices);
+            for &(id, value) in params {
+                s.set_param(id, value);
+            }
+            Box::new(s)
+        }
     };
     let mut track = TrackEngine::new(instrument);
     track.gain = ts.gain;
@@ -292,6 +320,9 @@ mod tests {
             self.playing = on;
         }
         fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+            self
+        }
+        fn as_any(&self) -> &dyn core::any::Any {
             self
         }
     }
@@ -677,5 +708,134 @@ mod tests {
 
         let expected = 0.5 * FRAC_1_SQRT_2 * 0.5;
         assert!((l[0] - expected).abs() < TOL, "L got {}, expected {}", l[0], expected);
+    }
+
+    #[test]
+    fn apply_snapshot_builds_a_subtractive_track_with_params() {
+        use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Synth".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::Subtractive {
+                    params: alloc::vec![(PID_FILTER_CUTOFF, 1234.0)],
+                },
+                steps: alloc::vec![],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        assert_eq!(e.tracks.len(), 1);
+        let s = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .expect("Subtractive instrument");
+        assert!(
+            (s.get_param(PID_FILTER_CUTOFF).unwrap() - 1234.0).abs() < 1e-3,
+            "param did not land in synth"
+        );
+    }
+
+    #[test]
+    fn drain_events_routes_set_param_to_track_plugin() {
+        use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Synth".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
+                steps: alloc::vec![],
+            }],
+        };
+        e.apply_snapshot(&snap);
+
+        let mut buf = alloc::vec![0u8; crate::sab_ring::HEADER_BYTES + 64];
+        crate::sab_ring::init(&mut buf);
+        {
+            let mut w = crate::sab_ring::RingWriter::new(&mut buf);
+            let payload = crate::event::encode(&Event::SetParam {
+                track: 0,
+                id: PID_FILTER_CUTOFF,
+                value: 4321.0,
+            })
+            .expect("encode");
+            assert!(w.write(&payload));
+        }
+        let mut r = crate::sab_ring::RingReader::new(&mut buf);
+        e.drain_events(&mut r);
+
+        let s = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .expect("Subtractive instrument");
+        assert!((s.get_param(PID_FILTER_CUTOFF).unwrap() - 4321.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn apply_snapshot_preserves_subtractive_when_kind_matches() {
+        use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
+        let mut e = Engine::new(48_000.0);
+        let mut snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Synth".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::Subtractive {
+                    params: alloc::vec![(PID_FILTER_CUTOFF, 1500.0)],
+                },
+                steps: alloc::vec![],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        let original_ptr = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .expect("Subtractive") as *const Subtractive as usize;
+
+        // Cosmetic + param edit — instrument should be reused, param updated.
+        snap.tracks[0].mute = true;
+        snap.tracks[0].instrument = InstrumentSnapshot::Subtractive {
+            params: alloc::vec![(PID_FILTER_CUTOFF, 7777.0)],
+        };
+        e.apply_snapshot(&snap);
+        let after = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .expect("Subtractive") as *const Subtractive as usize;
+        assert_eq!(original_ptr, after, "Subtractive was rebuilt on cosmetic edit");
+        assert!(
+            (e.tracks[0]
+                .instrument
+                .as_any()
+                .downcast_ref::<Subtractive>()
+                .unwrap()
+                .get_param(PID_FILTER_CUTOFF)
+                .unwrap()
+                - 7777.0)
+                .abs()
+                < 1e-3
+        );
     }
 }

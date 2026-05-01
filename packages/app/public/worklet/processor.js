@@ -89,6 +89,8 @@ class DawProcessor extends AudioWorkletProcessor {
         value = this.exports.debug_bpm();
       } else if (msg.what === 'trackPeak') {
         value = this.exports.debug_track_peak(msg.track >>> 0);
+      } else if (msg.what === 'trackParam') {
+        value = this.exports.debug_track_param(msg.track >>> 0, msg.paramId >>> 0);
       }
       this.port.postMessage({ type: 'debug-reply', id: msg.id, what: msg.what, value });
     } else if (msg.type === 'setStepMask') {

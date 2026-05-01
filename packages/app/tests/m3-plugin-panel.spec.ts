@@ -1,0 +1,115 @@
+import { test, expect, type Page } from '@playwright/test';
+
+// Phase-2 M3 — descriptors render as a host-rendered panel; param edits
+// round-trip from the UI through Y.Doc → SAB ring → engine; values
+// persist across reload via the IndexedDB-backed Y.Doc.
+
+const SUB_PID_FILTER_CUTOFF = 6;
+const SUB_PID_OSC_A_WAVE = 0;
+
+async function bridgeReady(page: Page) {
+  await expect
+    .poll(() => page.evaluate(() => Boolean((window as unknown as { __bridge?: object }).__bridge)))
+    .toBe(true);
+}
+
+async function trackCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __project: { trackCount: number } };
+    return w.__project.trackCount;
+  });
+}
+
+async function trackParam(page: Page, track: number, paramId: number): Promise<number> {
+  return page.evaluate(
+    ({ t, p }) => {
+      const w = window as unknown as {
+        __bridge: { debugTrackParam: (t: number, p: number) => Promise<number> };
+      };
+      return w.__bridge.debugTrackParam(t, p);
+    },
+    { t: track, p: paramId },
+  );
+}
+
+test.describe('phase-2 / M3 plugin panel (host-rendered descriptors)', () => {
+  test('descriptors render as 18 controls grouped by section', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+
+    await page.click('[data-testid="add-synth-track"]');
+
+    await expect(page.locator('[data-testid="plugin-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid^="param-"][data-testid$="-input"]')).toHaveCount(18);
+
+    for (const g of ['osc', 'filter', 'filter_env', 'amp']) {
+      await expect(page.locator(`[data-testid="plugin-group-${g}"]`)).toBeVisible();
+    }
+
+    // Wave param is enum-style — renders as a dropdown with the
+    // default option "Sine" preselected.
+    await expect(page.locator(`[data-testid="param-${SUB_PID_OSC_A_WAVE}-value"]`)).toHaveText('Sine');
+  });
+
+  test('cutoff slider edits round-trip Y.Doc → SAB → engine', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+
+    await page.click('[data-testid="add-synth-track"]');
+    const idx = (await trackCount(page)) - 1;
+
+    await expect
+      .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF))
+      .toBeCloseTo(2000, 0);
+
+    await page.evaluate(({ pid }) => {
+      const el = document.querySelector(
+        `[data-testid="param-${pid}-input"]`,
+      ) as HTMLInputElement;
+      el.value = '0.9';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, { pid: SUB_PID_FILTER_CUTOFF });
+
+    // Slider position 0.9 on the exp-curve 20 Hz..20 kHz lands ~10 kHz.
+    await expect
+      .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF), { timeout: 3000 })
+      .toBeGreaterThan(5000);
+  });
+
+  test('param values persist across reload via IndexedDB', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+
+    await page.click('[data-testid="add-synth-track"]');
+    const idx = (await trackCount(page)) - 1;
+
+    // Drive the slider to a non-default value.
+    await page.evaluate(({ pid }) => {
+      const el = document.querySelector(
+        `[data-testid="param-${pid}-input"]`,
+      ) as HTMLInputElement;
+      el.value = '0.85';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, { pid: SUB_PID_FILTER_CUTOFF });
+
+    await expect
+      .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF), { timeout: 3000 })
+      .toBeGreaterThan(4000);
+    const before = await trackParam(page, idx, SUB_PID_FILTER_CUTOFF);
+
+    await page.reload();
+    await bridgeReady(page);
+
+    // The synth track should still be there.
+    expect(await trackCount(page)).toBeGreaterThan(idx);
+
+    // Select it via the track row to make the panel visible.
+    await page.click(`[data-testid="track-row-${idx}"]`);
+    await expect(page.locator('[data-testid="plugin-panel"]')).toBeVisible();
+
+    // Engine reflects the persisted value from Y.Doc.
+    await expect
+      .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF), { timeout: 3000 })
+      .toBeCloseTo(before, 0);
+  });
+});

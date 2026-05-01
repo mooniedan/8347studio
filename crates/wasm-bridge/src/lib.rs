@@ -197,3 +197,17 @@ pub extern "C" fn debug_current_tick() -> f64 {
 pub extern "C" fn debug_bpm() -> f32 {
     unsafe { engine().tempo_map.bpm_at(engine().current_tick()) }
 }
+
+/// Read back a plugin parameter from the addressed track. Returns NaN
+/// if the track or parameter doesn't exist on the track's instrument.
+/// Used by Phase-2 tests to verify the Y.Doc → SAB → engine round-trip.
+#[no_mangle]
+pub extern "C" fn debug_track_param(track: u32, id: u32) -> f32 {
+    unsafe {
+        engine()
+            .tracks
+            .get(track as usize)
+            .and_then(|t| t.instrument.get_param(id))
+            .unwrap_or(f32::NAN)
+    }
+}

@@ -238,6 +238,79 @@ export function addMidiTrack(p: Project, waveform: Waveform = 'sine'): string {
   return trackId;
 }
 
+/// Add a MIDI track wired to the first-party subtractive synth. No
+/// clip yet — Phase-2 M4 generalizes the scheduler so step-seq /
+/// piano-roll clips can target the synth.
+export function addSubtractiveTrack(p: Project): string {
+  let trackId = '';
+  p.doc.transact(() => {
+    const id = makeId('track');
+    const track = new Y.Map<unknown>();
+
+    const params = new Y.Map<unknown>();
+    const instr = new Y.Map<unknown>();
+    instr.set('pluginId', 'builtin:subtractive');
+    instr.set('voices', 16);
+    instr.set('params', params);
+
+    const idx = p.tracks.length;
+    track.set('kind', 'MIDI');
+    track.set('name', `Synth ${idx + 1}`);
+    track.set('color', TRACK_PALETTE[idx % TRACK_PALETTE.length]);
+    track.set('mute', false);
+    track.set('solo', false);
+    track.set('gain', 1.0);
+    track.set('pan', 0);
+    track.set('instrumentSlot', instr);
+    track.set('inserts', new Y.Array());
+    track.set('sends', new Y.Array());
+    track.set('clips', new Y.Array<string>());
+
+    p.trackById.set(id, track);
+    p.tracks.push([id]);
+    trackId = id;
+  });
+  return trackId;
+}
+
+/// Per-param Y.Doc → engine writer. Param ids are stringified to match
+/// Y.Map's string-keyed contract; the engine consumes them as u32.
+export function setSynthParam(p: Project, trackIdx: number, paramId: number, value: number): void {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return;
+  const id = p.tracks.get(trackIdx);
+  const track = p.trackById.get(id);
+  if (!track || track.get('kind') !== 'MIDI') return;
+  const instr = track.get('instrumentSlot') as Y.Map<unknown> | undefined;
+  if (!instr || instr.get('pluginId') !== 'builtin:subtractive') return;
+  let params = instr.get('params') as Y.Map<unknown> | undefined;
+  if (!params) {
+    params = new Y.Map<unknown>();
+    instr.set('params', params);
+  }
+  params.set(String(paramId), value);
+}
+
+export function getSynthParam(p: Project, trackIdx: number, paramId: number): number | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const id = p.tracks.get(trackIdx);
+  const track = p.trackById.get(id);
+  if (!track || track.get('kind') !== 'MIDI') return null;
+  const instr = track.get('instrumentSlot') as Y.Map<unknown> | undefined;
+  if (!instr) return null;
+  const params = instr.get('params') as Y.Map<unknown> | undefined;
+  if (!params) return null;
+  const v = params.get(String(paramId));
+  return typeof v === 'number' ? v : null;
+}
+
+export function getTrackPluginId(p: Project, trackIdx: number): string | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const id = p.tracks.get(trackIdx);
+  const track = p.trackById.get(id);
+  const instr = track?.get('instrumentSlot') as Y.Map<unknown> | undefined;
+  return (instr?.get('pluginId') as string | undefined) ?? null;
+}
+
 export function removeTrack(p: Project, idx: number): void {
   if (idx < 0 || idx >= p.tracks.length) return;
   p.doc.transact(() => {

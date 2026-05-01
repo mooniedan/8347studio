@@ -44,6 +44,11 @@ pub enum InstrumentSnapshot {
     BuiltinSequencer { waveform: u32 },
     /// Audio/Bus tracks, or MIDI tracks with no instrument loaded.
     None,
+    /// Phase-2 first-party subtractive synth. `params` carries any
+    /// non-default parameter values as (id, value) pairs so the engine
+    /// rebuilds the patch deterministically from the snapshot. Empty
+    /// vec = "use defaults".
+    Subtractive { params: Vec<(u32, f32)> },
 }
 
 pub fn encode(snap: &ProjectSnapshot) -> Vec<u8> {

@@ -3,7 +3,13 @@
   import Sequencer from './lib/Sequencer.svelte';
   import TrackList from './lib/TrackList.svelte';
   import Mixer from './lib/Mixer.svelte';
-  import { createProject, type Project } from './lib/project';
+  import PluginPanel from './lib/PluginPanel.svelte';
+  import {
+    createProject,
+    addSubtractiveTrack,
+    getTrackPluginId,
+    type Project,
+  } from './lib/project';
   import * as audio from './lib/audio';
   import { attachBridge, type Bridge } from './lib/engine-bridge';
 
@@ -13,6 +19,12 @@
   let project = $state<Project | null>(null);
   let bridge = $state<Bridge | null>(null);
   let selectedTrackIdx = $state(0);
+  // Tracks the selected track's plugin id so the panel re-mounts on
+  // synth-track switch and disappears for non-synth tracks.
+  let selectedPluginId = $derived.by(() => {
+    if (!project) return null;
+    return getTrackPluginId(project, selectedTrackIdx);
+  });
 
   const ready = createProject().then(async (p) => {
     project = p;
@@ -58,6 +70,15 @@
           debugCurrentTick: () => audio.debugRead('currentTick'),
           debugBpm: () => audio.debugRead('bpm'),
           debugTrackPeak: (track: number) => audio.debugRead('trackPeak', track),
+          debugTrackParam: (track: number, paramId: number) =>
+            audio.debugTrackParam(track, paramId),
+          setParam: (track: number, paramId: number, value: number) =>
+            b.setParam(track, paramId, value),
+          addSubtractiveTrack: () => {
+            if (!project) return -1;
+            addSubtractiveTrack(project);
+            return project.tracks.length - 1;
+          },
         };
       },
     });
@@ -69,13 +90,28 @@
 {:then}
   {#if project && bridge}
     <h1>8347 Studio</h1>
+    <div class="toolbar">
+      <button
+        class="add-synth"
+        data-testid="add-synth-track"
+        onclick={() => {
+          if (!project) return;
+          addSubtractiveTrack(project);
+          selectedTrackIdx = project.tracks.length - 1;
+        }}
+      >+ Synth</button>
+    </div>
     <div class="layout">
       <TrackList
         {project}
         selectedIdx={selectedTrackIdx}
         onSelect={(i) => (selectedTrackIdx = i)}
       />
-      <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
+      {#if selectedPluginId === 'builtin:subtractive'}
+        <PluginPanel {project} trackIdx={selectedTrackIdx} />
+      {:else}
+        <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
+      {/if}
     </div>
     <Mixer {project} />
   {/if}
@@ -101,6 +137,23 @@
     grid-template-columns: auto 1fr;
     gap: 16px;
     padding: 16px;
+  }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  .add-synth {
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 4px 10px;
+    font: 11px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .add-synth:hover {
+    background: #232323;
   }
   .loading {
     font-family: system-ui, sans-serif;

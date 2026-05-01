@@ -654,6 +654,50 @@ impl Plugin for Subtractive {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn get_param(&self, id: ParamId) -> Option<f32> {
+        Some(match id {
+            PID_OSC_A_WAVE => waveform_to_f32(self.osc_a_wave),
+            PID_OSC_A_DETUNE => self.osc_a_detune_cents,
+            PID_OSC_B_WAVE => waveform_to_f32(self.osc_b_wave),
+            PID_OSC_B_DETUNE => self.osc_b_detune_cents,
+            PID_OSC_MIX => self.osc_mix,
+            PID_FILTER_TYPE => filter_type_to_f32(self.filter_type),
+            PID_FILTER_CUTOFF => self.filter_cutoff_hz,
+            PID_FILTER_RES => self.filter_res,
+            PID_FILTER_ENV_AMT => self.filter_env_amount_oct,
+            PID_AMP_A => self.amp_a,
+            PID_AMP_D => self.amp_d,
+            PID_AMP_S => self.amp_s,
+            PID_AMP_R => self.amp_r,
+            PID_FILT_A => self.filt_a,
+            PID_FILT_D => self.filt_d,
+            PID_FILT_S => self.filt_s,
+            PID_FILT_R => self.filt_r,
+            PID_GAIN => self.master_gain,
+            _ => return None,
+        })
+    }
+}
+
+fn waveform_to_f32(w: Waveform) -> f32 {
+    match w {
+        Waveform::Sine => 0.0,
+        Waveform::Saw => 1.0,
+        Waveform::Square => 2.0,
+    }
+}
+
+fn filter_type_to_f32(f: FilterType) -> f32 {
+    match f {
+        FilterType::Lowpass => 0.0,
+        FilterType::Highpass => 1.0,
+        FilterType::Bandpass => 2.0,
+    }
 }
 
 fn wave_from_f32(v: f32) -> Waveform {

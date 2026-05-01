@@ -47,6 +47,7 @@ const EV_SET_TRACK_SOLO = 4;
 const EV_SET_MASTER_GAIN = 5;
 const EV_SET_BPM = 6;
 const EV_LOCATE = 7;
+const EV_SET_PARAM = 8;
 
 function f32ToBytes(v: number): Uint8Array {
   const buf = new ArrayBuffer(4);
@@ -128,6 +129,15 @@ export function encodeLocate(tick: number): Uint8Array {
   return concat([new Uint8Array([EV_LOCATE]), u64LeBytes(tick)]);
 }
 
+export function encodeSetParam(track: number, id: number, value: number): Uint8Array {
+  return concat([
+    new Uint8Array([EV_SET_PARAM]),
+    u32VarintToBytes(track),
+    u32VarintToBytes(id),
+    f32ToBytes(value),
+  ]);
+}
+
 // ---- Ring writer -------------------------------------------------------
 
 export class RingWriter {
@@ -186,6 +196,7 @@ const TK_BUS = 2;
 
 const INSTR_BUILTIN_SEQ = 0;
 const INSTR_NONE = 1;
+const INSTR_SUBTRACTIVE = 2;
 
 function encodeString(s: string): Uint8Array {
   const utf8 = new TextEncoder().encode(s);
@@ -205,7 +216,30 @@ function instrumentSnapshotBytes(track: Y.Map<unknown>): Uint8Array {
   }
   const instr = track.get('instrumentSlot') as Y.Map<unknown> | undefined;
   if (!instr) return new Uint8Array([INSTR_NONE]);
+  const pluginId = instr.get('pluginId') as string | undefined;
   const params = instr.get('params') as Y.Map<unknown> | undefined;
+
+  if (pluginId === 'builtin:subtractive') {
+    const entries: [number, number][] = [];
+    if (params) {
+      params.forEach((v, k) => {
+        const id = parseInt(k, 10);
+        if (!Number.isNaN(id) && typeof v === 'number') {
+          entries.push([id, v]);
+        }
+      });
+    }
+    const parts: Uint8Array[] = [
+      new Uint8Array([INSTR_SUBTRACTIVE]),
+      u32VarintToBytes(entries.length),
+    ];
+    for (const [id, val] of entries) {
+      parts.push(u32VarintToBytes(id));
+      parts.push(f32ToBytes(val));
+    }
+    return concat(parts);
+  }
+
   const w = params?.get('waveform');
   const code = w === 'saw' ? 1 : w === 'square' ? 2 : 0;
   return concat([new Uint8Array([INSTR_BUILTIN_SEQ]), u32VarintToBytes(code)]);
@@ -281,6 +315,7 @@ export interface Bridge {
   setTransport(playing: boolean): void;
   setBpm(bpm: number): void;
   locate(tick: number): void;
+  setParam(track: number, id: number, value: number): void;
   destroy(): void;
 }
 
@@ -388,6 +423,43 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   // Seed the diff state so the first real edit produces an event.
   syncTrackParams();
 
+  // Synth param observers — one per subtractive track. Re-attach when
+  // tracks are added/removed/swapped so each observer captures the
+  // current track index. (Index can shift if earlier tracks are
+  // deleted; the observer resolves it lazily at fire time.)
+  const synthOffs = new Map<string, () => void>();
+  const reattachSynthObservers = () => {
+    for (const off of synthOffs.values()) off();
+    synthOffs.clear();
+    for (let idx = 0; idx < project.tracks.length; idx++) {
+      const trackId = project.tracks.get(idx);
+      const t = project.trackById.get(trackId);
+      if (!t || t.get('kind') !== 'MIDI') continue;
+      const instr = t.get('instrumentSlot') as Y.Map<unknown> | undefined;
+      if (!instr || instr.get('pluginId') !== 'builtin:subtractive') continue;
+      const params = instr.get('params') as Y.Map<unknown> | undefined;
+      if (!params) continue;
+      const handler = (ev: Y.YMapEvent<unknown>) => {
+        const trackIdx = project.tracks.toArray().indexOf(trackId);
+        if (trackIdx < 0) return;
+        ev.changes.keys.forEach((_change, key) => {
+          const id = parseInt(key, 10);
+          if (Number.isNaN(id)) return;
+          const v = params.get(key) as number | undefined;
+          if (typeof v === 'number') {
+            writer.write(encodeSetParam(trackIdx, id, v));
+          }
+        });
+      };
+      params.observe(handler);
+      synthOffs.set(trackId, () => params.unobserve(handler));
+    }
+  };
+  reattachSynthObservers();
+  project.tracks.observe(reattachSynthObservers);
+  // Instrument swap re-shapes which tracks have synths — re-attach.
+  project.trackById.observeDeep(reattachSynthObservers);
+
   // Initial sync.
   rebuild();
   onTempoChange();
@@ -418,6 +490,9 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
     locate(tick) {
       writer.write(encodeLocate(tick));
     },
+    setParam(track, id, value) {
+      writer.write(encodeSetParam(track, id, value));
+    },
     destroy() {
       project.tracks.unobserveDeep(onStructural);
       project.trackById.unobserveDeep(onStructural);
@@ -425,6 +500,10 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
       project.tempoMap.unobserveDeep(onTempoChange);
       project.clipById.unobserve(onClipChange);
       project.meta.unobserve(onMetaChange);
+      project.tracks.unobserve(reattachSynthObservers);
+      project.trackById.unobserveDeep(reattachSynthObservers);
+      for (const off of synthOffs.values()) off();
+      synthOffs.clear();
     },
   };
 }

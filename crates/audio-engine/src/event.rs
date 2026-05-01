@@ -19,6 +19,10 @@ pub enum Event {
     SetMasterGain { gain: f32 },
     SetBpm { bpm: f32 },
     Locate { tick: u64 },
+    /// Per-plugin parameter write. `id` matches the plugin's own
+    /// ParamDescriptor table; the audio thread routes to the
+    /// instrument on the addressed track.
+    SetParam { track: u32, id: u32, value: f32 },
 }
 
 pub fn encode(ev: &Event) -> postcard::Result<alloc::vec::Vec<u8>> {

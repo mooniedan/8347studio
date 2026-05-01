@@ -70,6 +70,12 @@ pub trait Plugin: Send + Any {
 
     fn set_param(&mut self, _id: ParamId, _value: f32) {}
 
+    /// Read back the current value of a parameter. Default returns
+    /// `None`; instruments that hold per-param state override.
+    fn get_param(&self, _id: ParamId) -> Option<f32> {
+        None
+    }
+
     fn handle_event(&mut self, _ev: PluginEvent) {}
 
     /// Render `frames` samples. `outputs[ch][..frames]` is overwritten
@@ -97,6 +103,10 @@ pub trait Plugin: Send + Any {
         None
     }
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// Immutable downcast escape hatch — used by the engine to decide
+    /// whether a snapshot's instrument shape matches the live one
+    /// (avoids rebuilding voices on cosmetic edits).
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// No-op plugin for tracks without a loaded instrument.
@@ -111,6 +121,9 @@ impl Plugin for Silence {
         }
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -185,6 +198,9 @@ mod tests {
             self.gain = 0.0;
         }
         fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn as_any(&self) -> &dyn Any {
             self
         }
     }

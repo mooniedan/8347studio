@@ -97,6 +97,17 @@ export async function debugRead(
   });
 }
 
+/// Read a plugin parameter back from the engine. Used by Phase-2 tests
+/// to verify Y.Doc → SAB → engine round-trips for synth params.
+export async function debugTrackParam(track: number, paramId: number): Promise<number> {
+  await ensureReady();
+  return new Promise((resolve) => {
+    const id = ++debugCounter;
+    debugWaiters.set(id, resolve);
+    node!.port.postMessage({ type: 'debug', id, what: 'trackParam', track, paramId });
+  });
+}
+
 /// Post a rebuild snapshot directly. Used by engine-bridge.attachBridge.
 export async function postRebuild(bytes: Uint8Array): Promise<void> {
   await ensureReady();
