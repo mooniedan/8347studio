@@ -48,6 +48,10 @@ const EV_SET_MASTER_GAIN = 5;
 const EV_SET_BPM = 6;
 const EV_LOCATE = 7;
 const EV_SET_PARAM = 8;
+const EV_NOTE_ON = 9;
+const EV_NOTE_OFF = 10;
+const EV_MIDI_CC = 11;
+const EV_ALL_NOTES_OFF = 12;
 
 function f32ToBytes(v: number): Uint8Array {
   const buf = new ArrayBuffer(4);
@@ -136,6 +140,34 @@ export function encodeSetParam(track: number, id: number, value: number): Uint8A
     u32VarintToBytes(id),
     f32ToBytes(value),
   ]);
+}
+
+export function encodeNoteOn(track: number, pitch: number, velocity: number): Uint8Array {
+  return concat([
+    new Uint8Array([EV_NOTE_ON]),
+    u32VarintToBytes(track),
+    new Uint8Array([pitch & 0x7f, velocity & 0x7f]),
+  ]);
+}
+
+export function encodeNoteOff(track: number, pitch: number): Uint8Array {
+  return concat([
+    new Uint8Array([EV_NOTE_OFF]),
+    u32VarintToBytes(track),
+    new Uint8Array([pitch & 0x7f]),
+  ]);
+}
+
+export function encodeMidiCc(track: number, cc: number, value: number): Uint8Array {
+  return concat([
+    new Uint8Array([EV_MIDI_CC]),
+    u32VarintToBytes(track),
+    new Uint8Array([cc & 0x7f, value & 0x7f]),
+  ]);
+}
+
+export function encodeAllNotesOff(track: number): Uint8Array {
+  return concat([new Uint8Array([EV_ALL_NOTES_OFF]), u32VarintToBytes(track)]);
 }
 
 // ---- Ring writer -------------------------------------------------------
@@ -354,6 +386,10 @@ export interface Bridge {
   setBpm(bpm: number): void;
   locate(tick: number): void;
   setParam(track: number, id: number, value: number): void;
+  noteOn(track: number, pitch: number, velocity: number): void;
+  noteOff(track: number, pitch: number): void;
+  midiCc(track: number, cc: number, value: number): void;
+  allNotesOff(track: number): void;
   destroy(): void;
 }
 
@@ -536,6 +572,18 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
     },
     setParam(track, id, value) {
       writer.write(encodeSetParam(track, id, value));
+    },
+    noteOn(track, pitch, velocity) {
+      writer.write(encodeNoteOn(track, pitch, velocity));
+    },
+    noteOff(track, pitch) {
+      writer.write(encodeNoteOff(track, pitch));
+    },
+    midiCc(track, cc, value) {
+      writer.write(encodeMidiCc(track, cc, value));
+    },
+    allNotesOff(track) {
+      writer.write(encodeAllNotesOff(track));
     },
     destroy() {
       project.tracks.unobserveDeep(onStructural);

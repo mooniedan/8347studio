@@ -23,6 +23,13 @@ pub enum Event {
     /// ParamDescriptor table; the audio thread routes to the
     /// instrument on the addressed track.
     SetParam { track: u32, id: u32, value: f32 },
+    /// Live MIDI input → instrument on the addressed track. Engine
+    /// translates to PluginEvent::{NoteOn,NoteOff,MidiCc,AllNotesOff}
+    /// and forwards via `handle_event`.
+    NoteOn { track: u32, pitch: u8, velocity: u8 },
+    NoteOff { track: u32, pitch: u8 },
+    MidiCc { track: u32, cc: u8, value: u8 },
+    AllNotesOff { track: u32 },
 }
 
 pub fn encode(ev: &Event) -> postcard::Result<alloc::vec::Vec<u8>> {

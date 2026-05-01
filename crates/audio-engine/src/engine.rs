@@ -206,6 +206,34 @@ impl Engine {
                     t.instrument.set_param(id, value);
                 }
             }
+            Event::NoteOn {
+                track,
+                pitch,
+                velocity,
+            } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.instrument
+                        .handle_event(crate::plugin::PluginEvent::NoteOn { pitch, velocity });
+                }
+            }
+            Event::NoteOff { track, pitch } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.instrument
+                        .handle_event(crate::plugin::PluginEvent::NoteOff { pitch });
+                }
+            }
+            Event::MidiCc { track, cc, value } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.instrument
+                        .handle_event(crate::plugin::PluginEvent::MidiCc { cc, value });
+                }
+            }
+            Event::AllNotesOff { track } => {
+                if let Some(t) = self.tracks.get_mut(track as usize) {
+                    t.instrument
+                        .handle_event(crate::plugin::PluginEvent::AllNotesOff);
+                }
+            }
         }
     }
 
@@ -844,6 +872,35 @@ mod tests {
             .downcast_ref::<Subtractive>()
             .expect("Subtractive instrument");
         assert!((s.get_param(PID_FILTER_CUTOFF).unwrap() - 4321.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn live_note_on_event_routes_to_track_instrument() {
+        use crate::plugins::subtractive::Subtractive;
+        let mut e = Engine::new(48_000.0);
+        e.add_track(TrackEngine::new(Box::new(Subtractive::new(48_000.0))));
+
+        let mut buf = alloc::vec![0u8; crate::sab_ring::HEADER_BYTES + 64];
+        crate::sab_ring::init(&mut buf);
+        {
+            let mut w = crate::sab_ring::RingWriter::new(&mut buf);
+            let payload = crate::event::encode(&Event::NoteOn {
+                track: 0,
+                pitch: 60,
+                velocity: 100,
+            })
+            .expect("encode");
+            assert!(w.write(&payload));
+        }
+        let mut r = crate::sab_ring::RingReader::new(&mut buf);
+        e.drain_events(&mut r);
+
+        // Render past the synth's 5 ms attack — Subtractive should be
+        // producing audio because the live event triggered a voice.
+        let mut out = alloc::vec![0.0f32; 4_800];
+        e.process_mono(&mut out);
+        let peak = out.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.05, "no audio after live NoteOn; peak {peak}");
     }
 
     #[test]
