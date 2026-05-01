@@ -13,6 +13,7 @@
   } from './lib/project';
   import * as audio from './lib/audio';
   import { attachBridge, type Bridge } from './lib/engine-bridge';
+  import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
 
   // Hydrate the Y.Doc from IndexedDB before mounting the Sequencer.
   // Avoids the race where a fresh UI writes defaults that overwrite a
@@ -79,6 +80,10 @@
             if (!project) return -1;
             addSubtractiveTrack(project);
             return project.tracks.length - 1;
+          },
+          createPluginUiHost: (trackIdx: number): PluginHost | null => {
+            if (!project) return null;
+            return createPluginUiHost(project, trackIdx);
           },
         };
       },
