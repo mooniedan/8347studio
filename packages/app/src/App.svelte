@@ -9,6 +9,7 @@
     createProject,
     addSubtractiveTrack,
     getTrackPluginId,
+    getArmedTrackIdx,
     type Project,
   } from './lib/project';
   import * as audio from './lib/audio';
@@ -40,12 +41,17 @@
     const { ring } = await audio.ensureReady();
     bridge = attachBridge(p, { ring, postRebuild: audio.postRebuild });
 
-    // M1: route every incoming MIDI message to the currently selected
-    // track. M2 will swap to the armed track.
+    // Route incoming MIDI to the armed track. If nothing's armed,
+    // fall back to the selected track so the panel works at-a-glance
+    // (matches the M1 behavior).
+    const routeIdx = () => {
+      const armed = getArmedTrackIdx(p);
+      return armed >= 0 ? armed : selectedTrackIdx;
+    };
     midi = createMidiInput({
-      noteOn: (pitch, velocity) => bridge!.noteOn(selectedTrackIdx, pitch, velocity),
-      noteOff: (pitch) => bridge!.noteOff(selectedTrackIdx, pitch),
-      cc: (cc, value) => bridge!.midiCc(selectedTrackIdx, cc, value),
+      noteOn: (pitch, velocity) => bridge!.noteOn(routeIdx(), pitch, velocity),
+      noteOff: (pitch) => bridge!.noteOff(routeIdx(), pitch),
+      cc: (cc, value) => bridge!.midiCc(routeIdx(), cc, value),
     });
     const refreshMidi = () => {
       midiStatus = midi!.status;

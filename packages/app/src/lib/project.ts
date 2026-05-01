@@ -391,6 +391,30 @@ export function getSynthParam(p: Project, trackIdx: number, paramId: number): nu
   return typeof v === 'number' ? v : null;
 }
 
+/// Y.Doc-backed arming state. `meta.armedTrackId` holds the trackId
+/// (string id, not index) of the single armed track — null when none.
+/// Single-track for Phase 3; multi-arm is Phase 9.
+export function getArmedTrackId(p: Project): string | null {
+  const v = p.meta.get('armedTrackId');
+  return typeof v === 'string' ? v : null;
+}
+
+export function setArmedTrackId(p: Project, trackId: string | null): void {
+  if (trackId == null) {
+    p.meta.delete('armedTrackId');
+  } else {
+    p.meta.set('armedTrackId', trackId);
+  }
+}
+
+/// Resolve the armed track id to a current index, or -1 if no track
+/// is armed (or the armed track has been removed).
+export function getArmedTrackIdx(p: Project): number {
+  const id = getArmedTrackId(p);
+  if (!id) return -1;
+  return p.tracks.toArray().indexOf(id);
+}
+
 export function getTrackPluginId(p: Project, trackIdx: number): string | null {
   if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
   const id = p.tracks.get(trackIdx);

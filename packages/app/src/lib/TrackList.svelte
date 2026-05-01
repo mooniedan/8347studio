@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import {
     addMidiTrack,
     removeTrack,
     getTrackName,
     getTrackColor,
+    getArmedTrackId,
+    setArmedTrackId,
     type Project,
   } from './project';
 
@@ -19,6 +21,7 @@
   } = $props();
 
   let tracks = $state<{ id: string; name: string; color: string }[]>(snapshot());
+  let armedId = $state<string | null>(untrack(() => getArmedTrackId(project)));
 
   function snapshot() {
     const out: { id: string; name: string; color: string }[] = [];
@@ -30,14 +33,27 @@
   }
 
   onMount(() => {
-    const refresh = () => { tracks = snapshot(); };
+    const refresh = () => {
+      tracks = snapshot();
+    };
     project.tracks.observe(refresh);
     project.trackById.observeDeep(refresh);
+
+    const onMeta = () => {
+      armedId = getArmedTrackId(project);
+    };
+    project.meta.observe(onMeta);
+
     return () => {
       project.tracks.unobserve(refresh);
       project.trackById.unobserveDeep(refresh);
+      project.meta.unobserve(onMeta);
     };
   });
+
+  function toggleArm(id: string) {
+    setArmedTrackId(project, armedId === id ? null : id);
+  }
 
   function add() {
     const _id = addMidiTrack(project, 'sine');
@@ -66,6 +82,14 @@
     >
       <span class="stripe" style="background:{t.color}"></span>
       <span class="name">{t.name}</span>
+      <button
+        class="arm"
+        class:armed={armedId === t.id}
+        onclick={(e) => { e.stopPropagation(); toggleArm(t.id); }}
+        data-testid={`track-arm-${i}`}
+        aria-label={`arm ${t.name}`}
+        title="Arm for live MIDI input"
+      >●</button>
       {#if tracks.length > 1}
         <button
           class="del"
@@ -108,6 +132,13 @@
   .row.selected { border-color: #555; background: #1f1f1f; }
   .stripe { width: 8px; height: 14px; border-radius: 2px; }
   .name { flex: 1; }
+  .arm {
+    appearance: none; background: transparent; border: 1px solid #2a2a2a; color: #555;
+    cursor: pointer; padding: 0 4px; font-size: 10px; line-height: 1;
+    border-radius: 8px; min-width: 14px; height: 14px;
+  }
+  .arm:hover { color: #ff8c00; border-color: #ff8c00; }
+  .arm.armed { color: #ff3a3a; border-color: #ff3a3a; background: #2a0e0e; }
   .del {
     appearance: none; background: transparent; border: none; color: #888;
     cursor: pointer; padding: 0 4px; font-size: 14px;
