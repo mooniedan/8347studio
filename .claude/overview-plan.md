@@ -206,6 +206,10 @@ Critical seams introduced:
 Forever-phase. Each item is an independent ticket; pull off the queue
 as they become important.
 
+- Piano-roll editor polish (Phase 2 left it as click-to-toggle 1/16
+  grid): drag-to-create variable lengths, drag-edges resize, drag-body
+  move, backspace delete, snap-grid options, velocity lane,
+  per-track clip-type switcher.
 - Shareable controller-map presets (Phase 3 left this as per-project).
 - Advanced automation curves: bezier, exponential, S-curve.
 - Project export bundle (zip of Y.Doc snapshot + assets) and import.

@@ -29,6 +29,24 @@ scheduled.
 
 ## Backlog
 
+### Piano-roll editor polish (carry-over from Phase 2)
+
+Phase-2 M4 shipped the headline verb (write notes, play, hear them on
+the synth) with a click-to-toggle 1/16-step grid. The richer editing
+listed in the M4 spec was deferred so M4 could close — pick up here:
+
+- Drag-to-create variable-length notes (mouse-down at start, drag to
+  end). Snap-grid aware.
+- Drag note edges to resize.
+- Drag note body to move (preserving length).
+- Backspace / delete key removes the selected note(s).
+- Snap-grid options: 1/4 / 1/8 / 1/16 / 1/32 / off, configurable per
+  clip.
+- Multi-select (shift-click, marquee-drag).
+- Velocity lane below the grid (per-note velocity edit).
+- Per-track clip-type switcher (StepSeq ↔ PianoRoll on the same
+  track) — today each track is seeded with one or the other.
+
 ### Controller-map presets (carry-over from Phase 3)
 
 - Per-device JSON presets stored separately from projects.
