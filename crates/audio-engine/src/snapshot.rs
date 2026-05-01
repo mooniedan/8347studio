@@ -28,6 +28,17 @@ pub struct TrackSnapshot {
     /// Per-step bitmask for the track's first StepSeq clip (Phase 1
     /// only ever has one). Empty when the track has no step clip.
     pub steps: Vec<u32>,
+    /// Notes for the track's first PianoRoll clip. Empty when the
+    /// track has no piano-roll clip. Phase-2 M4 introduced.
+    pub piano_roll_notes: Vec<NoteSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NoteSnapshot {
+    pub pitch: u8,
+    pub velocity: u8,
+    pub start_tick: u64,
+    pub length_ticks: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

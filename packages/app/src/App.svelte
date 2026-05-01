@@ -4,6 +4,7 @@
   import TrackList from './lib/TrackList.svelte';
   import Mixer from './lib/Mixer.svelte';
   import PluginPanel from './lib/PluginPanel.svelte';
+  import PianoRoll from './lib/PianoRoll.svelte';
   import {
     createProject,
     addSubtractiveTrack,
@@ -108,7 +109,10 @@
         onSelect={(i) => (selectedTrackIdx = i)}
       />
       {#if selectedPluginId === 'builtin:subtractive'}
-        <PluginPanel {project} trackIdx={selectedTrackIdx} />
+        <div class="synth-stack">
+          <PianoRoll {project} trackIdx={selectedTrackIdx} />
+          <PluginPanel {project} trackIdx={selectedTrackIdx} />
+        </div>
       {:else}
         <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
       {/if}
@@ -138,12 +142,18 @@
     gap: 16px;
     padding: 16px;
   }
+  .synth-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
   .toolbar {
     display: flex;
     gap: 8px;
     padding: 8px 16px;
     border-bottom: 1px solid #1f1f1f;
   }
+
   .add-synth {
     background: #1a1a1a;
     color: #ddd;

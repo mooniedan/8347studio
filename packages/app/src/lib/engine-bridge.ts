@@ -253,12 +253,17 @@ function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
   if (!clipIds || clipIds.length === 0) {
     return u32VarintToBytes(0);
   }
-  const clipId = clipIds.get(0);
-  const clip = project.clipById.get(clipId);
-  if (!clip || clip.get('kind') !== 'StepSeq') {
-    return u32VarintToBytes(0);
+  // Find the StepSeq clip if any.
+  let stepClip: Y.Map<unknown> | null = null;
+  for (const cid of clipIds.toArray()) {
+    const c = project.clipById.get(cid);
+    if (c?.get('kind') === 'StepSeq') {
+      stepClip = c;
+      break;
+    }
   }
-  const steps = clip.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!stepClip) return u32VarintToBytes(0);
+  const steps = stepClip.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
   if (!steps) return u32VarintToBytes(0);
   const masks: number[] = [];
   for (const cell of steps.toArray()) {
@@ -267,6 +272,38 @@ function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
   const parts: Uint8Array[] = [u32VarintToBytes(masks.length)];
   for (const m of masks) {
     parts.push(u32VarintToBytes(m));
+  }
+  return concat(parts);
+}
+
+function pianoRollBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
+  if (track.get('kind') !== 'MIDI') {
+    return u32VarintToBytes(0);
+  }
+  const clipIds = track.get('clips') as Y.Array<string> | undefined;
+  if (!clipIds || clipIds.length === 0) {
+    return u32VarintToBytes(0);
+  }
+  let pianoClip: Y.Map<unknown> | null = null;
+  for (const cid of clipIds.toArray()) {
+    const c = project.clipById.get(cid);
+    if (c?.get('kind') === 'PianoRoll') {
+      pianoClip = c;
+      break;
+    }
+  }
+  if (!pianoClip) return u32VarintToBytes(0);
+  const notes = pianoClip.get('notes') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!notes || notes.length === 0) return u32VarintToBytes(0);
+  const parts: Uint8Array[] = [u32VarintToBytes(notes.length)];
+  for (const n of notes.toArray()) {
+    const pitch = ((n.get('pitch') as number | undefined) ?? 60) & 0xff;
+    const velocity = ((n.get('velocity') as number | undefined) ?? 100) & 0xff;
+    const startTick = (n.get('startTick') as number | undefined) ?? 0;
+    const lengthTicks = (n.get('lengthTicks') as number | undefined) ?? 0;
+    parts.push(new Uint8Array([pitch, velocity]));
+    parts.push(u64VarintToBytes(startTick));
+    parts.push(u64VarintToBytes(lengthTicks));
   }
   return concat(parts);
 }
@@ -295,6 +332,7 @@ export function buildSnapshot(project: Project): Uint8Array {
         u32VarintToBytes(voices),
         instrumentSnapshotBytes(track),
         stepBytesForTrack(project, track),
+        pianoRollBytesForTrack(project, track),
       ]),
     );
   }
@@ -357,13 +395,19 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   project.tracks.observeDeep(onStructural);
   project.trackById.observeDeep(onStructural);
   // Clip add/remove triggers a rebuild so the engine sees the new step
-  // pattern. Single (non-deep) observe — we only care about key adds /
-  // deletes on clipById, not nested edits (those go via the track's
-  // clip.observeDeep inside Sequencer.svelte).
+  // pattern. Single (non-deep) observe handles add/remove keys on
+  // clipById; nested clip-content edits (step toggles, piano-roll
+  // notes) flow through the deep observer below so the engine
+  // snapshot reflects every Y.Doc change.
   const onClipChange = (ev: Y.YMapEvent<Y.Map<unknown>>) => {
     if (ev.changes.keys.size > 0) rebuild();
   };
   project.clipById.observe(onClipChange);
+  // Deep observe — picks up note add/remove inside PianoRoll clips
+  // (and step edits inside StepSeq clips, which redundantly mirror the
+  // direct setStepMask path until that path retires).
+  const onClipContentChange = () => rebuild();
+  project.clipById.observeDeep(onClipContentChange);
 
   const onTempoChange = () => {
     const bpm = projectBpm(project);
@@ -499,6 +543,7 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
       project.trackById.unobserveDeep(syncTrackParams);
       project.tempoMap.unobserveDeep(onTempoChange);
       project.clipById.unobserve(onClipChange);
+      project.clipById.unobserveDeep(onClipContentChange);
       project.meta.unobserve(onMetaChange);
       project.tracks.unobserve(reattachSynthObservers);
       project.trackById.unobserveDeep(reattachSynthObservers);

@@ -1,3 +1,4 @@
+use crate::clip_scheduler::{ClipScheduler, ScheduledNote};
 use crate::event::Event;
 use crate::oscillator::Waveform;
 use crate::plugin::{Plugin, Silence};
@@ -10,6 +11,10 @@ use crate::track::TrackEngine;
 
 pub struct Engine {
     pub tracks: Vec<TrackEngine>,
+    /// Per-track piano-roll scheduler. 1:1 with `tracks`. Empty
+    /// scheduler = "no PianoRoll clip on this track" (StepSeq tracks
+    /// continue to flow through the Sequencer plugin internally).
+    pub track_schedulers: Vec<ClipScheduler>,
     pub master_gain: f32,
     pub tempo_map: TempoMap,
     pub playing: bool,
@@ -23,6 +28,7 @@ impl Engine {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             tracks: Vec::new(),
+            track_schedulers: Vec::new(),
             master_gain: 1.0,
             tempo_map: TempoMap::new(sample_rate),
             playing: false,
@@ -105,10 +111,32 @@ impl Engine {
         if snap.tracks.len() < self.tracks.len() {
             self.tracks.truncate(snap.tracks.len());
         }
+        // Per-track piano-roll scheduler — keep length in lock-step
+        // with self.tracks, then refresh notes from the snapshot.
+        while self.track_schedulers.len() < self.tracks.len() {
+            self.track_schedulers.push(ClipScheduler::new());
+        }
+        if self.track_schedulers.len() > self.tracks.len() {
+            self.track_schedulers.truncate(self.tracks.len());
+        }
+        for (i, ts) in snap.tracks.iter().enumerate() {
+            let notes: alloc::vec::Vec<ScheduledNote> = ts
+                .piano_roll_notes
+                .iter()
+                .map(|n| ScheduledNote {
+                    pitch: n.pitch,
+                    velocity: n.velocity,
+                    start_tick: n.start_tick,
+                    end_tick: n.start_tick.saturating_add(n.length_ticks),
+                })
+                .collect();
+            self.track_schedulers[i].replace_notes(notes);
+        }
     }
 
     pub fn add_track(&mut self, track: TrackEngine) -> usize {
         self.tracks.push(track);
+        self.track_schedulers.push(ClipScheduler::new());
         self.tracks.len() - 1
     }
 
@@ -121,8 +149,13 @@ impl Engine {
         if !on {
             self.tick_pos = 0.0;
         }
-        for t in self.tracks.iter_mut() {
+        for (i, t) in self.tracks.iter_mut().enumerate() {
             t.instrument.set_playing(on);
+            if !on {
+                if let Some(sched) = self.track_schedulers.get(i) {
+                    sched.release_all(&mut *t.instrument);
+                }
+            }
         }
     }
 
@@ -194,7 +227,10 @@ impl Engine {
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
         debug_assert_eq!(left.len(), right.len());
+        let prev_tick = self.current_tick();
         self.advance_tick(left.len());
+        let next_tick = self.current_tick();
+        self.fire_track_schedulers(prev_tick, next_tick);
         for s in left.iter_mut() {
             *s = 0.0;
         }
@@ -214,6 +250,20 @@ impl Engine {
         }
     }
 
+    fn fire_track_schedulers(&mut self, prev_tick: u64, next_tick: u64) {
+        if !self.playing || next_tick <= prev_tick {
+            return;
+        }
+        let n = self.tracks.len().min(self.track_schedulers.len());
+        for i in 0..n {
+            let sched = &self.track_schedulers[i];
+            if sched.is_empty() {
+                continue;
+            }
+            sched.fire_for_block(prev_tick, next_tick, &mut *self.tracks[i].instrument);
+        }
+    }
+
     fn advance_tick(&mut self, frames: usize) {
         if !self.playing {
             return;
@@ -228,7 +278,10 @@ impl Engine {
     /// stereo bus and collapses it via constant-power sum. M3 replaces
     /// this with a true stereo path over the SAB ring.
     pub fn process_mono(&mut self, out: &mut [f32]) {
+        let prev_tick = self.current_tick();
         self.advance_tick(out.len());
+        let next_tick = self.current_tick();
+        self.fire_track_schedulers(prev_tick, next_tick);
         if self.right_scratch.len() < out.len() {
             self.right_scratch.resize(out.len(), 0.0);
         }
@@ -436,6 +489,7 @@ mod tests {
                     voices: 12,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 1 },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -447,6 +501,7 @@ mod tests {
                     voices: 16,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
                 },
             ],
         };
@@ -474,6 +529,7 @@ mod tests {
                 voices: 16,
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -637,6 +693,7 @@ mod tests {
                     0,
                     0
                 ],
+                piano_roll_notes: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -664,6 +721,7 @@ mod tests {
                 voices: 8,
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 2 },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
             }],
         };
         let bytes = crate::snapshot::encode(&snap);
@@ -728,6 +786,7 @@ mod tests {
                     params: alloc::vec![(PID_FILTER_CUTOFF, 1234.0)],
                 },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -759,6 +818,7 @@ mod tests {
                 voices: 16,
                 instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -787,6 +847,43 @@ mod tests {
     }
 
     #[test]
+    fn piano_roll_notes_drive_subtractive_via_track_scheduler() {
+        use crate::snapshot::NoteSnapshot;
+        let mut e = Engine::new(48_000.0);
+        // Track-level PianoRoll → Subtractive. C4 NoteOn at tick 0
+        // for 1920 ticks (one beat at 120 BPM, ppq=960).
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Lead".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![NoteSnapshot {
+                    pitch: 60,
+                    velocity: 100,
+                    start_tick: 0,
+                    length_ticks: 1920,
+                }],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.set_playing(true);
+
+        // Render enough audio for the track scheduler to fire NoteOn
+        // and the synth to climb past attack into sustain.
+        let mut buf = alloc::vec![0.0f32; 12_000];
+        e.process_mono(&mut buf);
+        let peak = buf.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.05, "no audio after PianoRoll NoteOn; peak {peak}");
+    }
+
+    #[test]
     fn apply_snapshot_preserves_subtractive_when_kind_matches() {
         use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
         let mut e = Engine::new(48_000.0);
@@ -804,6 +901,7 @@ mod tests {
                     params: alloc::vec![(PID_FILTER_CUTOFF, 1500.0)],
                 },
                 steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);

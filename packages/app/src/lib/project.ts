@@ -238,9 +238,9 @@ export function addMidiTrack(p: Project, waveform: Waveform = 'sine'): string {
   return trackId;
 }
 
-/// Add a MIDI track wired to the first-party subtractive synth. No
-/// clip yet — Phase-2 M4 generalizes the scheduler so step-seq /
-/// piano-roll clips can target the synth.
+/// Add a MIDI track wired to the first-party subtractive synth, with
+/// an empty PianoRoll clip (Phase-2 M4) so the user can write notes
+/// straight away.
 export function addSubtractiveTrack(p: Project): string {
   let trackId = '';
   p.doc.transact(() => {
@@ -268,9 +268,97 @@ export function addSubtractiveTrack(p: Project): string {
 
     p.trackById.set(id, track);
     p.tracks.push([id]);
+    createPianoRollClip(p, id);
     trackId = id;
   });
   return trackId;
+}
+
+function createPianoRollClip(p: Project, trackId: string): string {
+  const clipId = makeId('clip');
+  const clip = new Y.Map<unknown>();
+  clip.set('kind', 'PianoRoll');
+  clip.set('trackId', trackId);
+  clip.set('startTick', 0);
+  clip.set('lengthTicks', STEPS_PER_CLIP * STEP_TICKS);
+  clip.set('notes', new Y.Array<Y.Map<unknown>>());
+  p.clipById.set(clipId, clip);
+  const track = p.trackById.get(trackId);
+  if (track) {
+    const trackClips = track.get('clips') as Y.Array<string>;
+    trackClips.push([clipId]);
+  }
+  return clipId;
+}
+
+export interface PianoRollNote {
+  pitch: number;
+  velocity: number;
+  startTick: number;
+  lengthTicks: number;
+}
+
+export function getPianoRollClipForTrack(p: Project, idx: number): Y.Map<unknown> | null {
+  if (idx < 0 || idx >= p.tracks.length) return null;
+  const id = p.tracks.get(idx);
+  const track = p.trackById.get(id);
+  if (!track) return null;
+  const clipIds = track.get('clips') as Y.Array<string> | undefined;
+  if (!clipIds) return null;
+  for (const cid of clipIds.toArray()) {
+    const clip = p.clipById.get(cid);
+    if (clip?.get('kind') === 'PianoRoll') return clip;
+  }
+  return null;
+}
+
+export function readPianoRollNotes(clip: Y.Map<unknown>): PianoRollNote[] {
+  const arr = clip.get('notes') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr) return [];
+  return arr.toArray().map((n) => ({
+    pitch: ((n.get('pitch') as number | undefined) ?? 60) & 0xff,
+    velocity: ((n.get('velocity') as number | undefined) ?? 100) & 0xff,
+    startTick: (n.get('startTick') as number | undefined) ?? 0,
+    lengthTicks: (n.get('lengthTicks') as number | undefined) ?? 0,
+  }));
+}
+
+export function addPianoRollNote(
+  p: Project,
+  clip: Y.Map<unknown>,
+  note: PianoRollNote,
+): void {
+  const arr = clip.get('notes') as Y.Array<Y.Map<unknown>>;
+  p.doc.transact(() => {
+    const n = new Y.Map<unknown>();
+    n.set('pitch', note.pitch);
+    n.set('velocity', note.velocity);
+    n.set('startTick', note.startTick);
+    n.set('lengthTicks', note.lengthTicks);
+    arr.push([n]);
+  });
+}
+
+export function removePianoRollNoteAt(
+  p: Project,
+  clip: Y.Map<unknown>,
+  pitch: number,
+  startTick: number,
+): boolean {
+  const arr = clip.get('notes') as Y.Array<Y.Map<unknown>>;
+  let found = -1;
+  arr.forEach((n, i) => {
+    if (
+      ((n.get('pitch') as number) & 0xff) === pitch &&
+      (n.get('startTick') as number) === startTick &&
+      found < 0
+    ) {
+      found = i;
+    }
+  });
+  if (found < 0) return false;
+  p.doc.transact(() => arr.delete(found, 1));
+  return true;
 }
 
 /// Per-param Y.Doc → engine writer. Param ids are stringified to match
