@@ -10,6 +10,12 @@
     addSubtractiveTrack,
     getTrackPluginId,
     getArmedTrackIdx,
+    getPianoRollClipForTrack,
+    addPianoRollNote,
+    readPianoRollNotes,
+    getBpm,
+    PPQ,
+    STEP_TICKS,
     type Project,
   } from './lib/project';
   import * as audio from './lib/audio';
@@ -35,6 +41,13 @@
   let midiDevices = $state<{ id: string; name: string }[]>([]);
   let selectedMidiId = $state<string | null>(null);
 
+  // Live record (Phase 3 M3) — buffer in-flight notes by wall clock.
+  // Convert to tick positions on commit using the current project BPM.
+  type LiveNote = { pitch: number; velocity: number; onMs: number; offMs: number | null };
+  let recording = $state(false);
+  let recBuffer: LiveNote[] = [];
+  let recStartMs = 0;
+
   const ready = createProject().then(async (p) => {
     project = p;
     exposeDebugHandle(p);
@@ -49,8 +62,23 @@
       return armed >= 0 ? armed : selectedTrackIdx;
     };
     midi = createMidiInput({
-      noteOn: (pitch, velocity) => bridge!.noteOn(routeIdx(), pitch, velocity),
-      noteOff: (pitch) => bridge!.noteOff(routeIdx(), pitch),
+      noteOn: (pitch, velocity) => {
+        bridge!.noteOn(routeIdx(), pitch, velocity);
+        if (recording) {
+          recBuffer.push({ pitch, velocity, onMs: performance.now(), offMs: null });
+        }
+      },
+      noteOff: (pitch) => {
+        bridge!.noteOff(routeIdx(), pitch);
+        if (recording) {
+          for (let i = recBuffer.length - 1; i >= 0; i--) {
+            if (recBuffer[i].pitch === pitch && recBuffer[i].offMs == null) {
+              recBuffer[i].offMs = performance.now();
+              break;
+            }
+          }
+        }
+      },
       cc: (cc, value) => bridge!.midiCc(routeIdx(), cc, value),
     });
     const refreshMidi = () => {
@@ -79,6 +107,49 @@
     if (!midi) return;
     const v = (ev.target as HTMLSelectElement).value;
     midi.selectedDeviceId = v === '__all__' ? null : v;
+  }
+
+  function toggleRecord() {
+    if (!project) return;
+    if (recording) {
+      recording = false;
+      commitRecording();
+    } else {
+      recBuffer = [];
+      recStartMs = performance.now();
+      recording = true;
+    }
+  }
+
+  function commitRecording() {
+    if (!project) return;
+    const armedIdx = getArmedTrackIdx(project);
+    if (armedIdx < 0) {
+      recBuffer = [];
+      return;
+    }
+    const clip = getPianoRollClipForTrack(project, armedIdx);
+    if (!clip) {
+      recBuffer = [];
+      return;
+    }
+    const bpm = getBpm(project);
+    const ticksPerMs = (bpm * PPQ) / 60_000;
+    const nowMs = performance.now();
+    project.doc.transact(() => {
+      for (const n of recBuffer) {
+        const offMs = n.offMs ?? nowMs;
+        const startTick = Math.max(0, Math.round((n.onMs - recStartMs) * ticksPerMs));
+        const lengthTicks = Math.max(STEP_TICKS, Math.round((offMs - n.onMs) * ticksPerMs));
+        addPianoRollNote(project!, clip, {
+          pitch: n.pitch,
+          velocity: n.velocity,
+          startTick,
+          lengthTicks,
+        });
+      }
+    });
+    recBuffer = [];
   }
 
   function exposeDebugHandle(p: Project) {
@@ -133,6 +204,15 @@
           /// path. Bypasses requestMIDIAccess so Playwright can drive
           /// the decode logic.
           midiSimulate: (data: number[]) => midi?.simulate(data),
+          isRecording: () => recording,
+          /// Test affordance: dump the current note set on a track's
+          /// PianoRoll clip. Lets the M3 spec assert the recording
+          /// committed correctly without reaching into Y.Doc directly.
+          getPianoRollNotes: (trackIdx: number) => {
+            if (!project) return [];
+            const clip = getPianoRollClipForTrack(project, trackIdx);
+            return clip ? readPianoRollNotes(clip) : [];
+          },
         };
       },
     });
@@ -154,6 +234,18 @@
           selectedTrackIdx = project.tracks.length - 1;
         }}
       >+ Synth</button>
+
+      <button
+        class="record"
+        class:recording
+        data-testid="record"
+        onclick={toggleRecord}
+        aria-pressed={recording}
+        title="Record live MIDI into the armed track's piano-roll clip"
+      >
+        <span class="record-dot"></span>
+        {recording ? 'Recording' : 'Record'}
+      </button>
 
       <div class="midi-chip" data-testid="midi-chip">
         {#if midiStatus === 'unsupported'}
@@ -247,6 +339,39 @@
   }
   .add-synth:hover {
     background: #232323;
+  }
+  .record {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 4px 10px;
+    font: 11px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .record:hover {
+    background: #232323;
+  }
+  .record .record-dot {
+    width: 8px;
+    height: 8px;
+    background: #555;
+    border-radius: 50%;
+  }
+  .record.recording {
+    border-color: #ff3a3a;
+    color: #ff8585;
+    background: #2a0e0e;
+  }
+  .record.recording .record-dot {
+    background: #ff3a3a;
+    animation: rec-pulse 1s infinite;
+  }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
   }
   .midi-chip {
     display: flex;
