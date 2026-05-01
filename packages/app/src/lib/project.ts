@@ -415,6 +415,66 @@ export function getArmedTrackIdx(p: Project): number {
   return p.tracks.toArray().indexOf(id);
 }
 
+/// MIDI Learn — Phase-3 M4. Store CC# → { trackIdx, paramId }
+/// bindings under `meta.midiBindings`. Phase 9 will key by deviceId
+/// too; for now Phase-3 assumes one hardware controller at a time.
+export interface MidiBinding {
+  trackIdx: number;
+  paramId: number;
+}
+
+function getOrCreateMidiBindings(p: Project): Y.Map<Y.Map<unknown>> {
+  let m = p.meta.get('midiBindings') as Y.Map<Y.Map<unknown>> | undefined;
+  if (!m) {
+    m = new Y.Map<Y.Map<unknown>>();
+    p.meta.set('midiBindings', m);
+  }
+  return m;
+}
+
+export function getMidiBinding(p: Project, cc: number): MidiBinding | null {
+  const m = p.meta.get('midiBindings') as Y.Map<Y.Map<unknown>> | undefined;
+  if (!m) return null;
+  const entry = m.get(String(cc));
+  if (!entry) return null;
+  const trackIdx = entry.get('trackIdx') as number | undefined;
+  const paramId = entry.get('paramId') as number | undefined;
+  if (typeof trackIdx !== 'number' || typeof paramId !== 'number') return null;
+  return { trackIdx, paramId };
+}
+
+export function setMidiBinding(p: Project, cc: number, binding: MidiBinding): void {
+  const m = getOrCreateMidiBindings(p);
+  p.doc.transact(() => {
+    const entry = new Y.Map<unknown>();
+    entry.set('trackIdx', binding.trackIdx);
+    entry.set('paramId', binding.paramId);
+    m.set(String(cc), entry);
+  });
+}
+
+export function removeMidiBinding(p: Project, cc: number): void {
+  const m = p.meta.get('midiBindings') as Y.Map<Y.Map<unknown>> | undefined;
+  if (!m) return;
+  p.doc.transact(() => m.delete(String(cc)));
+}
+
+export function listMidiBindings(p: Project): { cc: number; binding: MidiBinding }[] {
+  const m = p.meta.get('midiBindings') as Y.Map<Y.Map<unknown>> | undefined;
+  if (!m) return [];
+  const out: { cc: number; binding: MidiBinding }[] = [];
+  m.forEach((entry, key) => {
+    const cc = parseInt(key, 10);
+    if (Number.isNaN(cc)) return;
+    const trackIdx = entry.get('trackIdx') as number | undefined;
+    const paramId = entry.get('paramId') as number | undefined;
+    if (typeof trackIdx === 'number' && typeof paramId === 'number') {
+      out.push({ cc, binding: { trackIdx, paramId } });
+    }
+  });
+  return out;
+}
+
 export function getTrackPluginId(p: Project, trackIdx: number): string | null {
   if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
   const id = p.tracks.get(trackIdx);

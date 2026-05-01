@@ -14,10 +14,19 @@
     addPianoRollNote,
     readPianoRollNotes,
     getBpm,
+    getMidiBinding,
+    setMidiBinding,
+    removeMidiBinding,
+    setSynthParam,
     PPQ,
     STEP_TICKS,
     type Project,
   } from './lib/project';
+  import {
+    SUBTRACTIVE_DESCRIPTORS,
+    descriptorById,
+    scaleCcToParam,
+  } from './lib/plugin-descriptors';
   import * as audio from './lib/audio';
   import { attachBridge, type Bridge } from './lib/engine-bridge';
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
@@ -47,6 +56,13 @@
   let recording = $state(false);
   let recBuffer: LiveNote[] = [];
   let recStartMs = 0;
+
+  // MIDI Learn (Phase 3 M4) — when active, the next CC# from a
+  // hardware controller is captured into pendingCC and the user picks
+  // a target param to bind. Learn-mode uses the panel's same control
+  // grid; clicks while pendingCC != null commit the binding.
+  let learnActive = $state(false);
+  let learnPendingCC = $state<number | null>(null);
 
   const ready = createProject().then(async (p) => {
     project = p;
@@ -79,7 +95,29 @@
           }
         }
       },
-      cc: (cc, value) => bridge!.midiCc(routeIdx(), cc, value),
+      cc: (cc, value) => {
+        // 1. Learn mode: capture the CC# and wait for the user to
+        // click a target param. Don't propagate to the engine.
+        if (learnActive) {
+          learnPendingCC = cc;
+          return;
+        }
+        // 2. Bound CC: drive the bound parameter via Y.Doc → SAB.
+        const binding = getMidiBinding(p, cc);
+        if (binding) {
+          const pluginId = getTrackPluginId(p, binding.trackIdx);
+          if (pluginId === 'builtin:subtractive') {
+            const desc = descriptorById(SUBTRACTIVE_DESCRIPTORS, binding.paramId);
+            if (desc) {
+              setSynthParam(p, binding.trackIdx, binding.paramId, scaleCcToParam(desc, value));
+            }
+          }
+          return;
+        }
+        // 3. Default: forward to the armed track's plugin so the
+        // synth's own MidiCc handler (e.g. sustain pedal) sees it.
+        bridge!.midiCc(routeIdx(), cc, value);
+      },
     });
     const refreshMidi = () => {
       midiStatus = midi!.status;
@@ -119,6 +157,24 @@
       recStartMs = performance.now();
       recording = true;
     }
+  }
+
+  function toggleLearn() {
+    learnActive = !learnActive;
+    if (!learnActive) learnPendingCC = null;
+  }
+
+  function bindPendingCC(paramId: number) {
+    if (!project || learnPendingCC == null) return;
+    const trackIdx = selectedTrackIdx;
+    if (trackIdx < 0) return;
+    setMidiBinding(project, learnPendingCC, { trackIdx, paramId });
+    learnPendingCC = null;
+  }
+
+  function unbindCC(cc: number) {
+    if (!project) return;
+    removeMidiBinding(project, cc);
   }
 
   function commitRecording() {
@@ -247,6 +303,23 @@
         {recording ? 'Recording' : 'Record'}
       </button>
 
+      <button
+        class="learn"
+        class:active={learnActive}
+        data-testid="midi-learn-toggle"
+        onclick={toggleLearn}
+        aria-pressed={learnActive}
+        title="Bind hardware CCs to plugin parameters"
+      >
+        {#if learnActive && learnPendingCC != null}
+          MIDI Learn — CC{learnPendingCC} → click a knob
+        {:else if learnActive}
+          MIDI Learn — wiggle a hardware knob
+        {:else}
+          MIDI Learn
+        {/if}
+      </button>
+
       <div class="midi-chip" data-testid="midi-chip">
         {#if midiStatus === 'unsupported'}
           <span class="midi-state">MIDI: unsupported</span>
@@ -286,7 +359,14 @@
       {#if selectedPluginId === 'builtin:subtractive'}
         <div class="synth-stack">
           <PianoRoll {project} trackIdx={selectedTrackIdx} />
-          <PluginPanel {project} trackIdx={selectedTrackIdx} />
+          <PluginPanel
+            {project}
+            trackIdx={selectedTrackIdx}
+            learnActive={learnActive}
+            learnPendingCC={learnPendingCC}
+            onBindParam={bindPendingCC}
+            onUnbindCC={unbindCC}
+          />
         </div>
       {:else}
         <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
@@ -372,6 +452,22 @@
   @keyframes rec-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
+  }
+  .learn {
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 4px 10px;
+    font: 11px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .learn:hover {
+    background: #232323;
+  }
+  .learn.active {
+    border-color: #4ad6ff;
+    color: #4ad6ff;
+    background: #0a1a22;
   }
   .midi-chip {
     display: flex;

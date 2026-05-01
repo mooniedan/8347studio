@@ -6,6 +6,7 @@
     setSynthParam,
     getSynthParam,
     getTrackPluginId,
+    listMidiBindings,
   } from './project';
   import { getDescriptors, isHostRendered } from './plugin-host';
   import {
@@ -13,10 +14,33 @@
     type ParamDescriptor,
   } from './plugin-descriptors';
 
-  const { project, trackIdx }: { project: Project; trackIdx: number } = $props();
+  const {
+    project,
+    trackIdx,
+    learnActive = false,
+    learnPendingCC = null,
+    onBindParam = () => {},
+    onUnbindCC = () => {},
+  }: {
+    project: Project;
+    trackIdx: number;
+    learnActive?: boolean;
+    learnPendingCC?: number | null;
+    onBindParam?: (paramId: number) => void;
+    onUnbindCC?: (cc: number) => void;
+  } = $props();
 
   let pluginId = $state(untrack(() => getTrackPluginId(project, trackIdx)));
   let values = $state<Record<number, number>>(untrack(() => snapshotValues()));
+  let bindings = $state<Map<number, number>>(untrack(() => snapshotBindings()));
+
+  function snapshotBindings(): Map<number, number> {
+    const out = new Map<number, number>();
+    for (const { cc, binding } of listMidiBindings(project)) {
+      if (binding.trackIdx === trackIdx) out.set(binding.paramId, cc);
+    }
+    return out;
+  }
 
   const descriptors = $derived(pluginId ? (getDescriptors(pluginId) ?? []) : []);
   const groups = $derived(groupDescriptors(descriptors));
@@ -54,7 +78,13 @@
     const refreshAll = () => {
       pluginId = getTrackPluginId(project, trackIdx);
       values = snapshotValues();
+      bindings = snapshotBindings();
     };
+
+    const onMeta = () => {
+      bindings = snapshotBindings();
+    };
+    project.meta.observeDeep(onMeta);
 
     // Track structure changes (instrument swap on this track).
     const offTrack = () => {};
@@ -99,8 +129,15 @@
       unobserveParams?.();
       project.tracks.unobserve(onStructure);
       project.trackById.unobserveDeep(refreshAll);
+      project.meta.unobserveDeep(onMeta);
     };
   });
+
+  function onParamClick(paramId: number) {
+    if (learnActive && learnPendingCC != null) {
+      onBindParam(paramId);
+    }
+  }
 
   // Slider position (0..1) → value. Linear or exponential mapping.
   function posToValue(d: ParamDescriptor, pos: number): number {
@@ -155,6 +192,7 @@
           <div class="controls">
             {#each g.items as d (d.id)}
               {@const v = values[d.id] ?? d.default}
+              {@const boundCC = bindings.get(d.id)}
               <label class="control" data-testid={`param-${d.id}`}>
                 <span class="cname">{d.name}</span>
                 {#if d.options}
@@ -180,6 +218,25 @@
                   />
                 {/if}
                 <span class="cval" data-testid={`param-${d.id}-value`}>{format(d, v)}</span>
+                {#if boundCC != null}
+                  <button
+                    type="button"
+                    class="cc-chip"
+                    onclick={() => onUnbindCC(boundCC)}
+                    data-testid={`param-${d.id}-cc`}
+                    title="Click to unbind"
+                  >CC{boundCC} ✕</button>
+                {/if}
+                {#if learnActive}
+                  <button
+                    type="button"
+                    class="learn-target"
+                    class:pending={learnPendingCC != null}
+                    onclick={() => onParamClick(d.id)}
+                    data-testid={`param-${d.id}-learn`}
+                    aria-label={`Bind hardware CC to ${d.name}`}
+                  ></button>
+                {/if}
               </label>
             {/each}
           </div>
@@ -235,9 +292,41 @@
   }
   .control {
     display: grid;
-    grid-template-columns: 1fr 1.2fr 0.7fr;
+    grid-template-columns: 1fr 1.2fr 0.7fr auto auto;
     gap: 4px;
     align-items: center;
+  }
+  .cc-chip {
+    appearance: none;
+    background: #2a0e0e;
+    color: #ff8585;
+    border: 1px solid #ff3a3a;
+    border-radius: 8px;
+    padding: 0 4px;
+    font: 9px ui-monospace, monospace;
+    cursor: pointer;
+  }
+  .cc-chip:hover {
+    background: #3a1414;
+  }
+  .learn-target {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 1px solid #4ad6ff;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .learn-target.pending {
+    background: #4ad6ff;
+    box-shadow: 0 0 4px #4ad6ff;
+    animation: learn-pulse 0.8s infinite;
+  }
+  @keyframes learn-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
   }
   .cname {
     color: #aaa;

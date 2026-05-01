@@ -83,3 +83,22 @@ export const GROUP_LABELS: Record<string, string> = {
   filter_env: 'Filter Envelope',
   amp: 'Amp',
 };
+
+/// Map a 0..127 MIDI CC value to a parameter value, honouring the
+/// descriptor's curve (linear or exponential). Exponential maps lift
+/// frequency-like params so 1 kHz sits near the middle of a 20 Hz..
+/// 20 kHz range.
+export function scaleCcToParam(d: ParamDescriptor, ccValue: number): number {
+  const pos = Math.max(0, Math.min(1, ccValue / 127));
+  if (d.curve === 'exp' && d.min > 0) {
+    return d.min * Math.pow(d.max / d.min, pos);
+  }
+  return d.min + (d.max - d.min) * pos;
+}
+
+export function descriptorById(
+  list: ParamDescriptor[],
+  id: number,
+): ParamDescriptor | null {
+  return list.find((d) => d.id === id) ?? null;
+}

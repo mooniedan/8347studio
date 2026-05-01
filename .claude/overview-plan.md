@@ -32,7 +32,7 @@ ones in their own `## Designs` section.
 | ✅ | **0** | Make a single-track polyphonic beat (existing POC).                      | Rust audio-engine, WASM bridge, AudioWorklet, Svelte UI, single oscillator + sequencer                          |
 | ✅ | **1** | Make a *multi-track* beat with the step sequencer.                       | Yjs source-of-truth, multi-track engine, tempo, clip-based content model, basic mixer                           |
 | ✅ | **2** | Play a real synth with envelopes and write a piano-roll part.            | Plugin trait, first-party synth (subtractive, ADSR, filter), piano-roll clip, MIDI events                       |
-| ⬜ | **3** | Hook up a MIDI keyboard and play live.                                   | WebMIDI input, armed-track routing, live recording into clips, basic CC-learn                                   |
+| ✅ | **3** | Hook up a MIDI keyboard and play live.                                   | WebMIDI input, armed-track routing, live recording into clips, basic CC-learn                                   |
 | ⬜ | **4** | Shape the sound with effects, sends, and automation.                     | Insert FX chain, send buses, parameter automation lanes, first-party EQ/comp/reverb/delay, container plugin     |
 | ⬜ | **5** | Drag in a sample, record live audio over a beat.                         | Audio track type, audio clip + warp opt-in, OPFS asset store, getUserMedia recording                            |
 | ⬜ | **6** | Control playback from a Picture-in-Picture window.                       | Document PIP transport, popup mixer, BroadcastChannel state sync, satellite render contract                     |
