@@ -259,8 +259,10 @@ impl Sequencer {
 }
 
 impl Plugin for Sequencer {
-    fn process(&mut self, out: &mut [f32]) {
-        Sequencer::process(self, out);
+    fn process(&mut self, _inputs: &[&[f32]], outputs: &mut [&mut [f32]], frames: usize) {
+        if let Some(ch) = outputs.get_mut(0) {
+            Sequencer::process(self, &mut ch[..frames]);
+        }
     }
 
     fn set_playing(&mut self, on: bool) {
@@ -269,6 +271,14 @@ impl Plugin for Sequencer {
 
     fn voice_count_hint(&self) -> Option<u32> {
         Some(MAX_VOICES as u32)
+    }
+
+    fn reset(&mut self) {
+        for v in self.voices.iter_mut() {
+            if v.env.is_held() {
+                v.env.release();
+            }
+        }
     }
 
     fn as_any_mut(&mut self) -> &mut dyn core::any::Any {

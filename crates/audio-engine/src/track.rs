@@ -38,11 +38,16 @@ impl TrackEngine {
     /// the instrument still ticks so internal transport stays in sync.
     pub fn render_into_stereo(&mut self, left: &mut [f32], right: &mut [f32], silenced: bool) {
         debug_assert_eq!(left.len(), right.len());
-        if self.scratch.len() < left.len() {
-            self.scratch.resize(left.len(), 0.0);
+        let frames = left.len();
+        if self.scratch.len() < frames {
+            self.scratch.resize(frames, 0.0);
         }
-        let mono = &mut self.scratch[..left.len()];
-        self.instrument.process(mono);
+        {
+            let mono = &mut self.scratch[..frames];
+            let mut outs: [&mut [f32]; 1] = [mono];
+            self.instrument.process(&[], &mut outs, frames);
+        }
+        let mono = &self.scratch[..frames];
         // Peak meter — reflects what the user *hears* (post-gain,
         // post-mute/solo) so the UI matches their action.
         let mut block_peak = 0.0f32;

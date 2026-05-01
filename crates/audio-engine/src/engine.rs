@@ -280,10 +280,12 @@ mod tests {
     }
 
     impl Plugin for ConstSource {
-        fn process(&mut self, out: &mut [f32]) {
+        fn process(&mut self, _inputs: &[&[f32]], outputs: &mut [&mut [f32]], frames: usize) {
             let v = if self.playing { self.value } else { 0.0 };
-            for s in out.iter_mut() {
-                *s = v;
+            if let Some(ch) = outputs.get_mut(0) {
+                for s in ch[..frames].iter_mut() {
+                    *s = v;
+                }
             }
         }
         fn set_playing(&mut self, on: bool) {
