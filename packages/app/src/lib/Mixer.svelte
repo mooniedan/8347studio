@@ -17,7 +17,18 @@
     type Project,
   } from './project';
 
-  const { project }: { project: Project } = $props();
+  const {
+    project,
+    audioEnabled = true,
+    onPopout,
+  }: {
+    project: Project;
+    /// Set false in satellite popups (no audio engine in those windows).
+    audioEnabled?: boolean;
+    /// Optional pop-out hook — when wired, the mixer renders a "Pop
+    /// out" button that opens a satellite window.
+    onPopout?: () => void;
+  } = $props();
 
   type Strip = {
     id: string;
@@ -67,43 +78,45 @@
     // Master meter: AnalyserNode tapped from the worklet output.
     let cleanupMaster: (() => void) | null = null;
     let masterRaf = 0;
-    void audio.ensureReady().then(({ node }) => {
-      const ctx = node.context as AudioContext;
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      const buf = new Float32Array(analyser.fftSize);
-      // Tap the worklet output before destination.
-      node.connect(analyser);
-      const tick = () => {
-        analyser.getFloatTimeDomainData(buf);
-        let p = 0;
-        for (let i = 0; i < buf.length; i++) {
-          const v = Math.abs(buf[i]);
-          if (v > p) p = v;
-        }
-        masterPeak = p;
-        masterRaf = requestAnimationFrame(tick);
-      };
-      masterRaf = requestAnimationFrame(tick);
-      cleanupMaster = () => {
-        cancelAnimationFrame(masterRaf);
-        try { node.disconnect(analyser); } catch {/* ignore */}
-      };
-    });
-
-    // Per-track meter: poll engine debug peak via the worklet RPC.
     let trackRaf = 0;
     let trackCancelled = false;
-    const pollTrackPeaks = async () => {
-      if (trackCancelled) return;
-      const next: number[] = [];
-      for (let i = 0; i < strips.length; i++) {
-        next.push(await audio.debugRead('trackPeak', i));
-      }
-      trackPeaks = next;
+    if (audioEnabled) {
+      void audio.ensureReady().then(({ node }) => {
+        const ctx = node.context as AudioContext;
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        const buf = new Float32Array(analyser.fftSize);
+        // Tap the worklet output before destination.
+        node.connect(analyser);
+        const tick = () => {
+          analyser.getFloatTimeDomainData(buf);
+          let p = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = Math.abs(buf[i]);
+            if (v > p) p = v;
+          }
+          masterPeak = p;
+          masterRaf = requestAnimationFrame(tick);
+        };
+        masterRaf = requestAnimationFrame(tick);
+        cleanupMaster = () => {
+          cancelAnimationFrame(masterRaf);
+          try { node.disconnect(analyser); } catch {/* ignore */}
+        };
+      });
+
+      // Per-track meter: poll engine debug peak via the worklet RPC.
+      const pollTrackPeaks = async () => {
+        if (trackCancelled) return;
+        const next: number[] = [];
+        for (let i = 0; i < strips.length; i++) {
+          next.push(await audio.debugRead('trackPeak', i));
+        }
+        trackPeaks = next;
+        trackRaf = requestAnimationFrame(pollTrackPeaks);
+      };
       trackRaf = requestAnimationFrame(pollTrackPeaks);
-    };
-    trackRaf = requestAnimationFrame(pollTrackPeaks);
+    }
 
     return () => {
       project.tracks.unobserve(refresh);
@@ -117,6 +130,14 @@
 </script>
 
 <div class="mixer" data-testid="mixer">
+  {#if onPopout}
+    <button
+      class="popout"
+      data-testid="mixer-popout"
+      onclick={() => onPopout?.()}
+      title="Open the mixer in a separate window"
+    >⤴</button>
+  {/if}
   {#each strips as s, i (s.id)}
     <div class="strip" class:solo={s.solo} class:mute={s.mute} data-testid={`mixer-strip-${i}`}>
       <span class="stripe" style="background:{s.color}"></span>
@@ -191,6 +212,19 @@
     background: #0f0f0f;
     border: 1px solid #2a2a2a;
     overflow-x: auto;
+  }
+  .popout {
+    align-self: flex-start;
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    color: #888;
+    padding: 2px 8px;
+    font: 12px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .popout:hover {
+    color: #ddd;
+    border-color: #444;
   }
   .strip {
     display: flex;

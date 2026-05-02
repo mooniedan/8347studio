@@ -110,9 +110,13 @@ export function attachRootSync(
       const bytes = Y.encodeStateAsUpdate(doc);
       const out: DocSnapshotMsg = { type: 'doc-snapshot', bytes };
       ch.postMessage(out);
+    } else if (msg.type === 'doc-update') {
+      // M4: satellites can write to their replica directly. Apply
+      // the update with origin REMOTE_ORIGIN so the root's update
+      // observer doesn't bounce it back. Yjs CRDT semantics make
+      // any concurrent-edit overlap benign.
+      Y.applyUpdate(doc, msg.bytes, REMOTE_ORIGIN);
     }
-    // doc-update and doc-snapshot from other senders are ignored on
-    // root — root is the source of truth for the document.
   };
 
   return {
@@ -123,13 +127,31 @@ export function attachRootSync(
   };
 }
 
-/// Attach satellite-side cross-window transport. The satellite's
-/// `doc` is treated as a read-only mirror; updates from root land
-/// here via applyUpdate with origin tagged.
+/// Attach satellite-side cross-window transport. M1+M2 originally
+/// treated the satellite Y.Doc as a read-only mirror; M4 widens it
+/// to bidirectional sync so popup-window UIs (Mixer, PianoRoll) can
+/// keep using the same project helpers as the root UI without a
+/// per-mutation intent enumeration. CRDT properties handle the rare
+/// concurrent-edit case benignly.
+///
+/// Origin tagging stops the obvious echo loop:
+///   - Local updates (origin !== REMOTE_ORIGIN) get broadcast.
+///   - Received updates apply with origin REMOTE_ORIGIN; the local
+///     update event then skips them.
+///
+/// The intent path (`dispatch`) is still useful for transport — root
+/// has audio engine state that's *not* in the Y.Doc — so it stays.
 export function attachSatelliteSync(doc: Y.Doc): SatelliteHandle {
   const ch = new BroadcastChannel(CHANNEL_NAME);
   const windowId = makeWindowId();
   const awarenessSubs = new Set<(id: string, s: AwarenessState) => void>();
+
+  const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
+    if (origin === REMOTE_ORIGIN) return;
+    const msg: DocUpdateMsg = { type: 'doc-update', bytes: update };
+    ch.postMessage(msg);
+  };
+  doc.on('update', onLocalUpdate);
 
   ch.onmessage = (ev) => {
     const msg = ev.data as SyncMsg;
@@ -159,6 +181,7 @@ export function attachSatelliteSync(doc: Y.Doc): SatelliteHandle {
       };
     },
     destroy() {
+      doc.off('update', onLocalUpdate);
       awarenessSubs.clear();
       ch.close();
     },

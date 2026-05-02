@@ -62,6 +62,13 @@ export async function createProject(): Promise<Project> {
   return project;
 }
 
+/// Build the Project shape on top of an existing Y.Doc. Phase-6 M4
+/// uses this to wrap the satellite popup's Y.Doc replica without
+/// re-running the IndexedDB-bound createProject flow.
+export function projectFromDoc(doc: Y.Doc, destroy: () => void = () => {}): Project {
+  return attach(doc, destroy);
+}
+
 function attach(doc: Y.Doc, destroy: () => void): Project {
   return {
     doc,

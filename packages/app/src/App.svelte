@@ -740,7 +740,12 @@
         </div>
       {/if}
     </div>
-    <Mixer {project} />
+    <Mixer
+      {project}
+      onPopout={() => {
+        window.open('?panel=mixer', 'mixer-popup', 'width=420,height=420');
+      }}
+    />
   {/if}
 {/await}
 
