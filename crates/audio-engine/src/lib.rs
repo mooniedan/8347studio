@@ -1,5 +1,7 @@
 extern crate alloc;
 
+pub mod asset_cache;
+pub mod audio_region;
 pub mod automation;
 pub mod clip_scheduler;
 pub mod engine;

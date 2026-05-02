@@ -1,3 +1,5 @@
+use crate::asset_cache::{AssetCache, AssetId};
+use crate::audio_region::AudioRegion;
 use crate::automation::evaluate_lane;
 use crate::clip_scheduler::{ClipScheduler, ScheduledNote};
 use crate::event::Event;
@@ -26,6 +28,13 @@ pub struct Engine {
     /// evaluated each audio block at current_tick and written into
     /// the addressed plugin's set_param.
     automation: Vec<AutomationLane>,
+    /// Per-asset PCM cache. Phase-5 M1. Audio-track region rendering
+    /// reads from here; the host populates it via register_asset.
+    pub asset_cache: AssetCache,
+    /// Absolute sample position on the timeline. Resets to 0 on
+    /// transport stop / locate(0). Used for sample-accurate Audio-
+    /// track region scheduling, parallel to tick_pos.
+    sample_pos: u64,
     pub master_gain: f32,
     pub tempo_map: TempoMap,
     pub playing: bool,
@@ -42,6 +51,8 @@ impl Engine {
             track_schedulers: Vec::new(),
             bus_inputs: Vec::new(),
             automation: Vec::new(),
+            asset_cache: AssetCache::new(),
+            sample_pos: 0,
             master_gain: 1.0,
             tempo_map: TempoMap::new(sample_rate),
             playing: false,
@@ -49,6 +60,10 @@ impl Engine {
             right_scratch: Vec::new(),
             sample_rate,
         }
+    }
+
+    pub fn current_sample(&self) -> u64 {
+        self.sample_pos
     }
 
     pub fn current_tick(&self) -> u64 {
@@ -141,6 +156,19 @@ impl Engine {
                     pre_fader: s.pre_fader,
                 });
             }
+            // Audio regions. Phase-5 M1.
+            self.tracks[i].audio_regions.clear();
+            for r in ts.audio_regions.iter() {
+                self.tracks[i].audio_regions.push(AudioRegion {
+                    asset_id: r.asset_id,
+                    start_sample: r.start_sample,
+                    length_samples: r.length_samples,
+                    asset_offset_samples: r.asset_offset_samples,
+                    gain: r.gain,
+                    fade_in_samples: r.fade_in_samples,
+                    fade_out_samples: r.fade_out_samples,
+                });
+            }
         }
         if snap.tracks.len() < self.tracks.len() {
             self.tracks.truncate(snap.tracks.len());
@@ -185,6 +213,7 @@ impl Engine {
         self.playing = on;
         if !on {
             self.tick_pos = 0.0;
+            self.sample_pos = 0;
         }
         for (i, t) in self.tracks.iter_mut().enumerate() {
             t.instrument.set_playing(on);
@@ -198,6 +227,20 @@ impl Engine {
 
     pub fn locate(&mut self, tick: u64) {
         self.tick_pos = tick as f64;
+        // Convert ticks to absolute samples using the current tempo
+        // map. With a constant-BPM Phase-1 tempo map this is exact;
+        // tempo-map polish will refine as tempo changes land.
+        let bpm = self.tempo_map.bpm_at(tick);
+        let ppq = 960.0_f64;
+        let ticks_per_sec = bpm as f64 * ppq / 60.0;
+        let secs = tick as f64 / ticks_per_sec.max(1e-6);
+        self.sample_pos = (secs * self.sample_rate as f64) as u64;
+    }
+
+    /// Phase-5 M1: register or replace the PCM frames for an asset id.
+    /// Frames are mono at the engine's sample rate.
+    pub fn register_asset(&mut self, asset_id: AssetId, frames: alloc::vec::Vec<f32>) {
+        self.asset_cache.put(asset_id, frames);
     }
 
     pub fn set_bpm(&mut self, bpm: f32) {
@@ -321,17 +364,40 @@ impl Engine {
             }
         }
         let any_solo = self.tracks.iter().any(|t| t.solo);
+        let block_start_sample = self.sample_pos;
         for i in 0..n {
             // 1. Render this track's mono. For a Bus, the "instrument"
-            // is replaced by the accumulated send sum that earlier
-            // tracks deposited in bus_inputs[i].
-            let is_bus = matches!(self.tracks[i].kind, crate::snapshot::TrackKind::Bus);
-            if is_bus {
-                let input_owned: alloc::vec::Vec<f32> =
-                    self.bus_inputs[i][..frames].to_vec();
-                self.tracks[i].compute_mono(frames, Some(&input_owned));
-            } else {
-                self.tracks[i].compute_mono(frames, None);
+            // is replaced by the accumulated send sum. For Audio
+            // tracks, the engine fills scratch from regions before
+            // running inserts.
+            let kind = self.tracks[i].kind;
+            match kind {
+                crate::snapshot::TrackKind::Bus => {
+                    let input_owned: alloc::vec::Vec<f32> =
+                        self.bus_inputs[i][..frames].to_vec();
+                    self.tracks[i].compute_mono(frames, Some(&input_owned));
+                }
+                crate::snapshot::TrackKind::Audio => {
+                    // Reset scratch + buffers via fill_source (writes
+                    // silence for Audio tracks).
+                    self.tracks[i].fill_source(frames, None);
+                    if self.playing {
+                        // Sum each region into the track's scratch.
+                        // Split borrow on disjoint engine fields.
+                        let track = &mut self.tracks[i];
+                        for region in &track.audio_regions {
+                            region.render_into(
+                                &mut track.scratch[..frames],
+                                block_start_sample,
+                                &self.asset_cache,
+                            );
+                        }
+                    }
+                    self.tracks[i].run_inserts(frames);
+                }
+                _ => {
+                    self.tracks[i].compute_mono(frames, None);
+                }
             }
             // 2. Apply post-fader sends — mono × send.level summed
             // into target bus inputs. Sends are post-mute / post-solo
@@ -361,6 +427,10 @@ impl Engine {
         }
         for s in right.iter_mut() {
             *s *= self.master_gain;
+        }
+        // Advance the absolute sample position for the next block.
+        if self.playing {
+            self.sample_pos = self.sample_pos.saturating_add(frames as u64);
         }
     }
 
@@ -625,6 +695,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -639,6 +710,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
                 },
             ],
         };
@@ -670,6 +742,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -837,6 +910,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -868,6 +942,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         let bytes = crate::snapshot::encode(&snap);
@@ -936,6 +1011,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -971,6 +1047,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1032,6 +1109,7 @@ mod tests {
                     },
                 ],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1084,6 +1162,7 @@ mod tests {
                     },
                 ],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1129,6 +1208,7 @@ mod tests {
                         level: 1.0,
                         pre_fader: false,
                     }],
+                    audio_regions: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Bus,
@@ -1153,6 +1233,7 @@ mod tests {
                         branches: alloc::vec![],
                     }],
                     sends: alloc::vec![],
+                audio_regions: alloc::vec![],
                 },
             ],
         };
@@ -1224,6 +1305,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1278,6 +1360,79 @@ mod tests {
             "end cutoff should clamp to 8000, got {}",
             cutoff_end
         );
+    }
+
+    #[test]
+    fn audio_track_renders_registered_asset_at_region_position() {
+        use crate::snapshot::AudioRegionSnapshot;
+        let mut e = Engine::new(48_000.0);
+        // Synthesize a 1 kHz sine asset at 48k for 0.1 s.
+        let mut sine = alloc::vec![0.0f32; 4_800];
+        for (i, s) in sine.iter_mut().enumerate() {
+            *s = libm::sinf(2.0 * core::f32::consts::PI * 1_000.0 * i as f32 / 48_000.0);
+        }
+        e.register_asset(7, sine.clone());
+
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            automation: alloc::vec![],
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Audio,
+                name: "Loop".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::None,
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
+                sends: alloc::vec![],
+                audio_regions: alloc::vec![AudioRegionSnapshot {
+                    asset_id: 7,
+                    start_sample: 256,
+                    length_samples: 4_800,
+                    asset_offset_samples: 0,
+                    gain: 1.0,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0,
+                }],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.set_playing(true);
+
+        // Render two 256-sample blocks. Block 0 covers samples 0..256
+        // (region hasn't started); block 1 covers 256..512 (region's
+        // first 256 samples).
+        let mut block0_l = alloc::vec![0.0f32; 256];
+        let mut block0_r = alloc::vec![0.0f32; 256];
+        e.process_stereo(&mut block0_l, &mut block0_r);
+        // Region hasn't started; output silent.
+        assert!(
+            block0_l.iter().all(|s| s.abs() < 1e-5),
+            "expected silence in block 0, peak {}",
+            block0_l.iter().fold(0.0f32, |a, b| a.max(b.abs()))
+        );
+
+        let mut block1_l = alloc::vec![0.0f32; 256];
+        let mut block1_r = alloc::vec![0.0f32; 256];
+        e.process_stereo(&mut block1_l, &mut block1_r);
+        // Block 1 contains the asset's first 256 samples — applied to
+        // both channels via constant-power pan (×1/√2).
+        let scale = core::f32::consts::FRAC_1_SQRT_2;
+        for (i, &expected_raw) in sine[..256].iter().enumerate() {
+            let expected = expected_raw * scale;
+            let got = block1_l[i];
+            assert!(
+                (got - expected).abs() < 1e-4,
+                "block 1 sample {} mismatch: got {}, expected {}",
+                i,
+                got,
+                expected
+            );
+        }
     }
 
     #[test]
@@ -1336,6 +1491,7 @@ mod tests {
                 }],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1371,6 +1527,7 @@ mod tests {
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
+                audio_regions: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);

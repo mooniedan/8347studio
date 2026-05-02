@@ -1,3 +1,4 @@
+use crate::audio_region::AudioRegion;
 use crate::plugin::Plugin;
 use crate::snapshot::TrackKind;
 
@@ -28,6 +29,10 @@ pub struct TrackEngine {
     /// Sends to bus tracks. Read each block by the engine to mix
     /// (this track's mono × send.level) into the target's bus input.
     pub sends: Vec<Send>,
+    /// Phase-5 M1: audio regions on Audio-kind tracks. Empty for
+    /// MIDI / Bus tracks. The engine renders these into scratch
+    /// instead of running the instrument when kind == Audio.
+    pub audio_regions: Vec<AudioRegion>,
     pub kind: TrackKind,
     pub gain: f32,
     pub pan: f32, // -1.0 = full L, 0.0 = center, 1.0 = full R
@@ -49,6 +54,7 @@ impl TrackEngine {
             instrument,
             inserts: Vec::new(),
             sends: Vec::new(),
+            audio_regions: Vec::new(),
             kind: TrackKind::Midi,
             gain: 1.0,
             pan: 0.0,
@@ -64,21 +70,41 @@ impl TrackEngine {
     /// Compute the post-insert mono signal into self.scratch[..frames].
     /// For a non-bus track, the source is the instrument. For a bus,
     /// the source is the accumulated send sum the caller passes in.
+    /// For Audio tracks, the engine fills the scratch from regions
+    /// before calling run_inserts.
     pub fn compute_mono(&mut self, frames: usize, bus_input: Option<&[f32]>) {
+        self.fill_source(frames, bus_input);
+        self.run_inserts(frames);
+    }
+
+    /// Resize scratch buffers and write the source signal — instrument
+    /// output for MIDI tracks, the supplied bus input for Bus tracks,
+    /// silence for Audio tracks (the engine fills them externally).
+    pub fn fill_source(&mut self, frames: usize, bus_input: Option<&[f32]>) {
         if self.scratch.len() < frames {
             self.scratch.resize(frames, 0.0);
         }
         if self.scratch2.len() < frames {
             self.scratch2.resize(frames, 0.0);
         }
-        // Source: bus_input if Some, else instrument output.
         if let Some(input) = bus_input {
             self.scratch[..frames].copy_from_slice(input);
-        } else {
-            let mut outs: [&mut [f32]; 1] = [&mut self.scratch[..frames]];
-            self.instrument.process(&[], &mut outs, frames);
+            return;
         }
-        // Run inserts: copy scratch→scratch2 as input, write back to scratch.
+        if matches!(self.kind, TrackKind::Audio) {
+            // Engine fills the scratch via render_audio_into; nothing
+            // to do here.
+            for s in self.scratch[..frames].iter_mut() {
+                *s = 0.0;
+            }
+            return;
+        }
+        let mut outs: [&mut [f32]; 1] = [&mut self.scratch[..frames]];
+        self.instrument.process(&[], &mut outs, frames);
+    }
+
+    /// Run the insert chain on whatever's already in self.scratch.
+    pub fn run_inserts(&mut self, frames: usize) {
         for slot in self.inserts.iter_mut() {
             if slot.bypass {
                 continue;

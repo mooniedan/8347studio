@@ -405,6 +405,31 @@ function sendBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
   return concat(parts);
 }
 
+/// Encode the track's audio regions. Phase-5 M1 wire format:
+///   u32 varint count, then for each region:
+///     u32 varint asset_id
+///     u64 varint start_sample
+///     u64 varint length_samples
+///     u64 varint asset_offset_samples
+///     f32 LE gain
+///     u32 varint fade_in_samples
+///     u32 varint fade_out_samples
+function audioRegionBytesForTrack(track: Y.Map<unknown>): Uint8Array {
+  const arr = track.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr || arr.length === 0) return u32VarintToBytes(0);
+  const parts: Uint8Array[] = [u32VarintToBytes(arr.length)];
+  arr.forEach((r) => {
+    parts.push(u32VarintToBytes((r.get('assetId') as number | undefined) ?? 0));
+    parts.push(u64VarintToBytes((r.get('startSample') as number | undefined) ?? 0));
+    parts.push(u64VarintToBytes((r.get('lengthSamples') as number | undefined) ?? 0));
+    parts.push(u64VarintToBytes((r.get('assetOffsetSamples') as number | undefined) ?? 0));
+    parts.push(f32ToBytes((r.get('gain') as number | undefined) ?? 1.0));
+    parts.push(u32VarintToBytes((r.get('fadeInSamples') as number | undefined) ?? 0));
+    parts.push(u32VarintToBytes((r.get('fadeOutSamples') as number | undefined) ?? 0));
+  });
+  return concat(parts);
+}
+
 function pianoRollBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
   if (track.get('kind') !== 'MIDI') {
     return u32VarintToBytes(0);
@@ -513,6 +538,7 @@ export function buildSnapshot(project: Project): Uint8Array {
         pianoRollBytesForTrack(project, track),
         insertBytesForTrack(track),
         sendBytesForTrack(project, track),
+        audioRegionBytesForTrack(track),
       ]),
     );
   }

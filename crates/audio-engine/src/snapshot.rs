@@ -64,6 +64,21 @@ pub struct TrackSnapshot {
     pub inserts: Vec<InsertSnapshot>,
     /// Sends to bus tracks. Phase-4 M2 introduced.
     pub sends: Vec<SendSnapshot>,
+    /// Audio regions on Audio-kind tracks. Phase-5 M1. Empty for
+    /// MIDI / Bus tracks. Coordinates are sample-accurate and
+    /// computed host-side from (startTick, project tempo).
+    pub audio_regions: Vec<AudioRegionSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AudioRegionSnapshot {
+    pub asset_id: u32,
+    pub start_sample: u64,
+    pub length_samples: u64,
+    pub asset_offset_samples: u64,
+    pub gain: f32,
+    pub fade_in_samples: u32,
+    pub fade_out_samples: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
