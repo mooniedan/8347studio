@@ -8,11 +8,26 @@ pub struct InsertSlot {
     pub bypass: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Send {
+    /// Index of the target track. The target should be a Bus and
+    /// should sit later in the track list than the sender (the engine
+    /// processes tracks in order; sends to earlier tracks are dropped).
+    pub target_track: u32,
+    pub level: f32,
+    /// Pre/post fader. Phase-4 M2 always treats sends as post-fader
+    /// (after gain/pan/mute/solo). Pre-fader is a polish item.
+    pub pre_fader: bool,
+}
+
 pub struct TrackEngine {
     pub instrument: Box<dyn Plugin>,
     /// Insert FX chain. Processed in order, instrument → inserts[0] →
     /// inserts[1] → ... → mix bus. Bypassed slots are skipped.
     pub inserts: Vec<InsertSlot>,
+    /// Sends to bus tracks. Read each block by the engine to mix
+    /// (this track's mono × send.level) into the target's bus input.
+    pub sends: Vec<Send>,
     pub kind: TrackKind,
     pub gain: f32,
     pub pan: f32, // -1.0 = full L, 0.0 = center, 1.0 = full R
@@ -22,9 +37,9 @@ pub struct TrackEngine {
     /// Decaying peak meter — updated each render. Reading is fine on
     /// any thread (single u32 bit-pattern under wasm32).
     pub peak: f32,
-    scratch: Vec<f32>,
+    pub scratch: Vec<f32>,
     /// Second mono scratch — ping-pong target for insert processing.
-    scratch2: Vec<f32>,
+    pub scratch2: Vec<f32>,
 }
 
 impl TrackEngine {
@@ -33,6 +48,7 @@ impl TrackEngine {
         Self {
             instrument,
             inserts: Vec::new(),
+            sends: Vec::new(),
             kind: TrackKind::Midi,
             gain: 1.0,
             pan: 0.0,
@@ -45,55 +61,45 @@ impl TrackEngine {
         }
     }
 
-    /// Render this track's contribution and add it into the stereo bus.
-    /// Caller decides `silenced` (e.g. solo-disabled). Even when silenced,
-    /// the instrument still ticks so internal transport stays in sync.
-    pub fn render_into_stereo(&mut self, left: &mut [f32], right: &mut [f32], silenced: bool) {
-        debug_assert_eq!(left.len(), right.len());
-        let frames = left.len();
+    /// Compute the post-insert mono signal into self.scratch[..frames].
+    /// For a non-bus track, the source is the instrument. For a bus,
+    /// the source is the accumulated send sum the caller passes in.
+    pub fn compute_mono(&mut self, frames: usize, bus_input: Option<&[f32]>) {
         if self.scratch.len() < frames {
             self.scratch.resize(frames, 0.0);
         }
         if self.scratch2.len() < frames {
             self.scratch2.resize(frames, 0.0);
         }
-        // 1. Instrument writes into scratch.
-        {
-            let mono = &mut self.scratch[..frames];
-            let mut outs: [&mut [f32]; 1] = [mono];
+        // Source: bus_input if Some, else instrument output.
+        if let Some(input) = bus_input {
+            self.scratch[..frames].copy_from_slice(input);
+        } else {
+            let mut outs: [&mut [f32]; 1] = [&mut self.scratch[..frames]];
             self.instrument.process(&[], &mut outs, frames);
         }
-        // 2. Run each non-bypassed insert in order, ping-ponging
-        //    between scratch (current) and scratch2 (next). After the
-        //    loop, `output_in_scratch` says where the final mono
-        //    signal lives.
-        let mut output_in_scratch = true;
+        // Run inserts: copy scratch→scratch2 as input, write back to scratch.
         for slot in self.inserts.iter_mut() {
             if slot.bypass {
                 continue;
             }
-            if output_in_scratch {
-                let input = &self.scratch[..frames];
-                let output = &mut self.scratch2[..frames];
-                let in_arr: [&[f32]; 1] = [input];
-                let mut out_arr: [&mut [f32]; 1] = [output];
-                slot.plugin.process(&in_arr, &mut out_arr, frames);
-            } else {
-                let input = &self.scratch2[..frames];
-                let output = &mut self.scratch[..frames];
-                let in_arr: [&[f32]; 1] = [input];
-                let mut out_arr: [&mut [f32]; 1] = [output];
-                slot.plugin.process(&in_arr, &mut out_arr, frames);
-            }
-            output_in_scratch = !output_in_scratch;
+            self.scratch2[..frames].copy_from_slice(&self.scratch[..frames]);
+            let in_arr: [&[f32]; 1] = [&self.scratch2[..frames]];
+            let mut out_arr: [&mut [f32]; 1] = [&mut self.scratch[..frames]];
+            slot.plugin.process(&in_arr, &mut out_arr, frames);
         }
-        let mono: &[f32] = if output_in_scratch {
-            &self.scratch[..frames]
-        } else {
-            &self.scratch2[..frames]
-        };
-        // Peak meter — reflects what the user *hears* (post-gain,
-        // post-mute/solo) so the UI matches their action.
+    }
+
+    /// Read the mono signal computed by compute_mono.
+    pub fn mono_output(&self, frames: usize) -> &[f32] {
+        &self.scratch[..frames]
+    }
+
+    /// Apply gain/pan and contribute to the stereo bus L/R. Updates
+    /// the decaying peak meter as a side-effect (post-gain, post-mute/
+    /// solo so the meter matches what the user hears).
+    pub fn mix_to_master(&mut self, frames: usize, left: &mut [f32], right: &mut [f32], silenced: bool) {
+        let mono = &self.scratch[..frames];
         let mut block_peak = 0.0f32;
         let effective_gain = if silenced || self.mute { 0.0 } else { self.gain };
         for s in mono.iter() {
@@ -102,19 +108,15 @@ impl TrackEngine {
                 block_peak = v;
             }
         }
-        // Smooth decay: ~10× per second of release. Block_peak wins on
-        // attack; otherwise the meter falls.
         const DECAY: f32 = 0.85;
         if block_peak > self.peak {
             self.peak = block_peak;
         } else {
             self.peak = self.peak * DECAY + block_peak * (1.0 - DECAY);
         }
-
         if silenced || self.mute {
             return;
         }
-        // Constant-power pan: theta in [0, π/2], cos(L) and sin(R).
         let theta = (self.pan.clamp(-1.0, 1.0) + 1.0) * core::f32::consts::FRAC_PI_4;
         let gl = self.gain * libm::cosf(theta);
         let gr = self.gain * libm::sinf(theta);
@@ -122,5 +124,15 @@ impl TrackEngine {
             left[i] += s * gl;
             right[i] += s * gr;
         }
+    }
+
+    /// Convenience wrapper for tests: instrument → inserts → master.
+    /// Production audio path uses compute_mono / mix_to_master in
+    /// engine.rs so buses can splice their accumulated send sum in.
+    pub fn render_into_stereo(&mut self, left: &mut [f32], right: &mut [f32], silenced: bool) {
+        debug_assert_eq!(left.len(), right.len());
+        let frames = left.len();
+        self.compute_mono(frames, None);
+        self.mix_to_master(frames, left, right, silenced);
     }
 }

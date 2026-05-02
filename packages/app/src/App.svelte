@@ -6,9 +6,11 @@
   import PluginPanel from './lib/PluginPanel.svelte';
   import PianoRoll from './lib/PianoRoll.svelte';
   import InsertSlots from './lib/InsertSlots.svelte';
+  import SendList from './lib/SendList.svelte';
   import {
     createProject,
     addSubtractiveTrack,
+    addBusTrack,
     getTrackPluginId,
     getArmedTrackIdx,
     getPianoRollClipForTrack,
@@ -293,6 +295,16 @@
       >+ Synth</button>
 
       <button
+        class="add-synth"
+        data-testid="add-bus-track"
+        onclick={() => {
+          if (!project) return;
+          addBusTrack(project);
+          selectedTrackIdx = project.tracks.length - 1;
+        }}
+      >+ Bus</button>
+
+      <button
         class="record"
         class:recording
         data-testid="record"
@@ -369,11 +381,13 @@
             onUnbindCC={unbindCC}
           />
           <InsertSlots {project} trackIdx={selectedTrackIdx} />
+          <SendList {project} trackIdx={selectedTrackIdx} />
         </div>
       {:else}
         <div class="track-view">
           <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
           <InsertSlots {project} trackIdx={selectedTrackIdx} />
+          <SendList {project} trackIdx={selectedTrackIdx} />
         </div>
       {/if}
     </div>

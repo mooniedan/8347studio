@@ -8,7 +8,7 @@ use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
 use crate::snapshot::{InsertKind, InstrumentSnapshot, ProjectSnapshot};
 use crate::tempo_map::TempoMap;
-use crate::track::{InsertSlot, TrackEngine};
+use crate::track::{InsertSlot, Send, TrackEngine};
 
 pub struct Engine {
     pub tracks: Vec<TrackEngine>,
@@ -16,6 +16,10 @@ pub struct Engine {
     /// scheduler = "no PianoRoll clip on this track" (StepSeq tracks
     /// continue to flow through the Sequencer plugin internally).
     pub track_schedulers: Vec<ClipScheduler>,
+    /// Per-track bus-input mono buffer (Phase-4 M2). 1:1 with `tracks`.
+    /// Filled each block by the sends of earlier tracks; consumed by
+    /// the bus track itself (kind == Bus) when its turn comes.
+    bus_inputs: Vec<Vec<f32>>,
     pub master_gain: f32,
     pub tempo_map: TempoMap,
     pub playing: bool,
@@ -30,6 +34,7 @@ impl Engine {
         Self {
             tracks: Vec::new(),
             track_schedulers: Vec::new(),
+            bus_inputs: Vec::new(),
             master_gain: 1.0,
             tempo_map: TempoMap::new(sample_rate),
             playing: false,
@@ -123,6 +128,15 @@ impl Engine {
                 self.tracks[i].inserts.push(InsertSlot {
                     plugin,
                     bypass: ins.bypass,
+                });
+            }
+            // Sends. Replace wholesale on every snapshot.
+            self.tracks[i].sends.clear();
+            for s in ts.sends.iter() {
+                self.tracks[i].sends.push(Send {
+                    target_track: s.target_track,
+                    level: s.level,
+                    pre_fader: s.pre_fader,
                 });
             }
         }
@@ -273,8 +287,9 @@ impl Engine {
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
         debug_assert_eq!(left.len(), right.len());
+        let frames = left.len();
         let prev_tick = self.current_tick();
-        self.advance_tick(left.len());
+        self.advance_tick(frames);
         let next_tick = self.current_tick();
         self.fire_track_schedulers(prev_tick, next_tick);
         for s in left.iter_mut() {
@@ -283,10 +298,54 @@ impl Engine {
         for s in right.iter_mut() {
             *s = 0.0;
         }
+        // Resize + zero per-track bus-input scratches.
+        let n = self.tracks.len();
+        while self.bus_inputs.len() < n {
+            self.bus_inputs.push(Vec::new());
+        }
+        for buf in self.bus_inputs.iter_mut().take(n) {
+            if buf.len() < frames {
+                buf.resize(frames, 0.0);
+            }
+            for s in buf[..frames].iter_mut() {
+                *s = 0.0;
+            }
+        }
         let any_solo = self.tracks.iter().any(|t| t.solo);
-        for track in self.tracks.iter_mut() {
-            let silenced = any_solo && !track.solo;
-            track.render_into_stereo(left, right, silenced);
+        for i in 0..n {
+            // 1. Render this track's mono. For a Bus, the "instrument"
+            // is replaced by the accumulated send sum that earlier
+            // tracks deposited in bus_inputs[i].
+            let is_bus = matches!(self.tracks[i].kind, crate::snapshot::TrackKind::Bus);
+            if is_bus {
+                let input_owned: alloc::vec::Vec<f32> =
+                    self.bus_inputs[i][..frames].to_vec();
+                self.tracks[i].compute_mono(frames, Some(&input_owned));
+            } else {
+                self.tracks[i].compute_mono(frames, None);
+            }
+            // 2. Apply post-fader sends — mono × send.level summed
+            // into target bus inputs. Sends are post-mute / post-solo
+            // (a muted track sends nothing), matching Live/Logic.
+            let silenced = any_solo && !self.tracks[i].solo;
+            let send_gate = if silenced || self.tracks[i].mute { 0.0 } else { 1.0 };
+            // Copy sends out so we can mutate bus_inputs while reading the track's mono.
+            let send_count = self.tracks[i].sends.len();
+            for s_idx in 0..send_count {
+                let send = self.tracks[i].sends[s_idx];
+                let target = send.target_track as usize;
+                if target >= n || target == i {
+                    continue;
+                }
+                let mono = &self.tracks[i].scratch[..frames];
+                let target_buf = &mut self.bus_inputs[target][..frames];
+                let g = send.level * send_gate;
+                for k in 0..frames {
+                    target_buf[k] += mono[k] * g;
+                }
+            }
+            // 3. Mix this track to master via gain/pan/mute/solo.
+            self.tracks[i].mix_to_master(frames, left, right, silenced);
         }
         for s in left.iter_mut() {
             *s *= self.master_gain;
@@ -320,33 +379,23 @@ impl Engine {
         self.tick_pos += dt;
     }
 
-    /// Mono compatibility path for the Phase-1 worklet. Renders the full
-    /// stereo bus and collapses it via constant-power sum. M3 replaces
-    /// this with a true stereo path over the SAB ring.
+    /// Mono compatibility path for the Phase-1 worklet. Renders the
+    /// full stereo bus including bus routing, then collapses to mono
+    /// via constant-power sum.
     pub fn process_mono(&mut self, out: &mut [f32]) {
-        let prev_tick = self.current_tick();
-        self.advance_tick(out.len());
-        let next_tick = self.current_tick();
-        self.fire_track_schedulers(prev_tick, next_tick);
-        if self.right_scratch.len() < out.len() {
-            self.right_scratch.resize(out.len(), 0.0);
+        let frames = out.len();
+        let mut right_local = core::mem::take(&mut self.right_scratch);
+        if right_local.len() < frames {
+            right_local.resize(frames, 0.0);
         }
-        let right = &mut self.right_scratch[..out.len()];
-        for s in out.iter_mut() {
-            *s = 0.0;
+        self.process_stereo(out, &mut right_local[..frames]);
+        // process_stereo already applied master_gain to both sides.
+        // Constant-power sum-to-mono: (L+R)/√2.
+        let scale = core::f32::consts::FRAC_1_SQRT_2;
+        for (l, r) in out.iter_mut().zip(right_local[..frames].iter()) {
+            *l = (*l + *r) * scale;
         }
-        for s in right.iter_mut() {
-            *s = 0.0;
-        }
-        let any_solo = self.tracks.iter().any(|t| t.solo);
-        for track in self.tracks.iter_mut() {
-            let silenced = any_solo && !track.solo;
-            track.render_into_stereo(out, right, silenced);
-        }
-        let g = self.master_gain * core::f32::consts::FRAC_1_SQRT_2;
-        for (l, r) in out.iter_mut().zip(right.iter()) {
-            *l = (*l + *r) * g;
-        }
+        self.right_scratch = right_local;
     }
 }
 
@@ -537,6 +586,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -550,6 +600,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
                 },
             ],
         };
@@ -579,6 +630,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -744,6 +796,7 @@ mod tests {
                 ],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -773,6 +826,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         let bytes = crate::snapshot::encode(&snap);
@@ -839,6 +893,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -872,6 +927,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -929,6 +985,7 @@ mod tests {
                         bypass: false,
                     },
                 ],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -977,6 +1034,7 @@ mod tests {
                         bypass: false,
                     },
                 ],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -992,6 +1050,95 @@ mod tests {
         // Skipped first → only second 0.5 applies.
         let expected = 0.5 * core::f32::consts::FRAC_1_SQRT_2;
         assert!((l[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn bus_track_with_gain2_doubles_send_signal() {
+        use crate::snapshot::{InsertKind, InsertSnapshot, SendSnapshot};
+        let mut e = Engine::new(48_000.0);
+        // Track 0: source. Sends 1.0 to bus at index 1.
+        // Track 1: Bus, hosts a Gain×2 insert. Bus output doubles its
+        // input signal magnitude.
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![
+                TrackSnapshot {
+                    kind: TrackKind::Midi,
+                    name: "Source".into(),
+                    gain: 1.0,
+                    pan: 0.0,
+                    mute: false,
+                    solo: false,
+                    voices: 16,
+                    instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                    steps: alloc::vec![],
+                    piano_roll_notes: alloc::vec![],
+                    inserts: alloc::vec![],
+                    sends: alloc::vec![SendSnapshot {
+                        target_track: 1,
+                        level: 1.0,
+                        pre_fader: false,
+                    }],
+                },
+                TrackSnapshot {
+                    kind: TrackKind::Bus,
+                    name: "Reverb Bus".into(),
+                    // Mute the source's dry path effectively by giving
+                    // the bus a clean signal path: the ConstSource on
+                    // track 0 still contributes to master, but we can
+                    // verify the bus output by comparing with vs.
+                    // without the bus.
+                    gain: 1.0,
+                    pan: 0.0,
+                    mute: false,
+                    solo: false,
+                    voices: 16,
+                    instrument: InstrumentSnapshot::None,
+                    steps: alloc::vec![],
+                    piano_roll_notes: alloc::vec![],
+                    inserts: alloc::vec![InsertSnapshot {
+                        kind: InsertKind::Gain,
+                        params: alloc::vec![(0, 2.0)],
+                        bypass: false,
+                    }],
+                    sends: alloc::vec![],
+                },
+            ],
+        };
+        e.apply_snapshot(&snap);
+        // Source: a 0.25 const value.
+        e.tracks[0].instrument = alloc::boxed::Box::new(ConstSource {
+            value: 0.25,
+            playing: true,
+        });
+        // Mute source's dry path so we measure the bus contribution
+        // alone.
+        e.tracks[0].mute = true;
+        e.set_playing(true);
+
+        let mut l = [0.0f32; 8];
+        let mut r = [0.0f32; 8];
+        e.process_stereo(&mut l, &mut r);
+        // Source → muted (no dry to master) but sends still route at
+        // post-fader: the M2 contract is sends are post-mute, so a
+        // muted track contributes 0 to its sends. Expectation: silent.
+        assert!(l.iter().all(|s| s.abs() < 1e-6), "muted source leaked through send: {:?}", &l[..2]);
+
+        // Now unmute; bus should now contribute 0.25 × 2.0 = 0.5,
+        // panned center → 0.5 × FRAC_1_SQRT_2 each side. Plus the
+        // dry source at 0.25 panned center → 0.25 × FRAC_1_SQRT_2.
+        // Sum: 0.75 × FRAC_1_SQRT_2.
+        e.tracks[0].mute = false;
+        let mut l = [0.0f32; 8];
+        let mut r = [0.0f32; 8];
+        e.process_stereo(&mut l, &mut r);
+        let expected = 0.75 * core::f32::consts::FRAC_1_SQRT_2;
+        assert!(
+            (l[0] - expected).abs() < 1e-5,
+            "expected dry+wet = 0.75/√2 ({}), got {}",
+            expected,
+            l[0]
+        );
     }
 
     #[test]
@@ -1048,6 +1195,7 @@ mod tests {
                     length_ticks: 1920,
                 }],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1081,6 +1229,7 @@ mod tests {
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
                 inserts: alloc::vec![],
+                sends: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);

@@ -33,6 +33,15 @@ pub struct TrackSnapshot {
     pub piano_roll_notes: Vec<NoteSnapshot>,
     /// Insert FX chain. Phase-4 M1 introduced. Empty = dry signal.
     pub inserts: Vec<InsertSnapshot>,
+    /// Sends to bus tracks. Phase-4 M2 introduced.
+    pub sends: Vec<SendSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SendSnapshot {
+    pub target_track: u32,
+    pub level: f32,
+    pub pre_fader: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

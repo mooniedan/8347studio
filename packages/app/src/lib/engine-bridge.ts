@@ -347,6 +347,31 @@ function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
   return concat(parts);
 }
 
+function sendBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
+  const arr = track.get('sends') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr || arr.length === 0) return u32VarintToBytes(0);
+  const trackIds = project.tracks.toArray();
+  const known: { target: number; level: number; preFader: boolean }[] = [];
+  arr.forEach((s) => {
+    const tid = s.get('targetTrackId') as string | undefined;
+    if (!tid) return;
+    const idx = trackIds.indexOf(tid);
+    if (idx < 0) return;
+    known.push({
+      target: idx,
+      level: (s.get('level') as number | undefined) ?? 0,
+      preFader: Boolean(s.get('preFader')),
+    });
+  });
+  const parts: Uint8Array[] = [u32VarintToBytes(known.length)];
+  for (const k of known) {
+    parts.push(u32VarintToBytes(k.target));
+    parts.push(f32ToBytes(k.level));
+    parts.push(new Uint8Array([k.preFader ? 1 : 0]));
+  }
+  return concat(parts);
+}
+
 function pianoRollBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
   if (track.get('kind') !== 'MIDI') {
     return u32VarintToBytes(0);
@@ -405,6 +430,7 @@ export function buildSnapshot(project: Project): Uint8Array {
         stepBytesForTrack(project, track),
         pianoRollBytesForTrack(project, track),
         insertBytesForTrack(track),
+        sendBytesForTrack(project, track),
       ]),
     );
   }
@@ -457,7 +483,8 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
         path === '' ||
         path.endsWith('instrumentSlot') ||
         path.endsWith('clips') ||
-        path.includes('inserts')
+        path.includes('inserts') ||
+        path.includes('sends')
       ) {
         needs = true;
         break;

@@ -475,6 +475,126 @@ export function listMidiBindings(p: Project): { cc: number; binding: MidiBinding
   return out;
 }
 
+/// Add a Bus track. Buses host inserts (e.g. a reverb plugin in M3+)
+/// and aggregate signal from any track that sends to them. Phase-4 M2.
+export function addBusTrack(p: Project, name?: string): string {
+  let trackId = '';
+  p.doc.transact(() => {
+    const id = makeId('track');
+    const track = new Y.Map<unknown>();
+    const idx = p.tracks.length;
+    track.set('kind', 'Bus');
+    track.set('name', name ?? `Bus ${idx + 1}`);
+    track.set('color', TRACK_PALETTE[idx % TRACK_PALETTE.length]);
+    track.set('mute', false);
+    track.set('solo', false);
+    track.set('gain', 1.0);
+    track.set('pan', 0);
+    // No instrumentSlot. Empty clips/inserts/sends Y.Arrays so callers
+    // that assume "always present" stay safe.
+    track.set('clips', new Y.Array<string>());
+    track.set('inserts', new Y.Array());
+    track.set('sends', new Y.Array());
+    p.trackById.set(id, track);
+    p.tracks.push([id]);
+    trackId = id;
+  });
+  return trackId;
+}
+
+export interface SendView {
+  targetTrackId: string;
+  targetTrackIdx: number;
+  level: number;
+  preFader: boolean;
+}
+
+function trackSendArr(p: Project, trackIdx: number): Y.Array<Y.Map<unknown>> | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const id = p.tracks.get(trackIdx);
+  const track = p.trackById.get(id);
+  if (!track) return null;
+  return (track.get('sends') as Y.Array<Y.Map<unknown>> | undefined) ?? null;
+}
+
+export function getTrackSends(p: Project, trackIdx: number): SendView[] {
+  const arr = trackSendArr(p, trackIdx);
+  if (!arr) return [];
+  const trackIds = p.tracks.toArray();
+  const out: SendView[] = [];
+  arr.forEach((s) => {
+    const tid = s.get('targetTrackId') as string | undefined;
+    if (!tid) return;
+    const idx = trackIds.indexOf(tid);
+    out.push({
+      targetTrackId: tid,
+      targetTrackIdx: idx,
+      level: (s.get('level') as number | undefined) ?? 1.0,
+      preFader: Boolean(s.get('preFader')),
+    });
+  });
+  return out;
+}
+
+export function addSend(
+  p: Project,
+  fromTrackIdx: number,
+  toTrackId: string,
+  level = 0.5,
+): void {
+  const arr = trackSendArr(p, fromTrackIdx);
+  if (!arr) return;
+  // Reject self-routing.
+  const fromId = p.tracks.get(fromTrackIdx);
+  if (fromId === toTrackId) return;
+  // Reject if target isn't a Bus.
+  const target = p.trackById.get(toTrackId);
+  if (!target || target.get('kind') !== 'Bus') return;
+  p.doc.transact(() => {
+    const send = new Y.Map<unknown>();
+    send.set('targetTrackId', toTrackId);
+    send.set('level', level);
+    send.set('preFader', false);
+    arr.push([send]);
+  });
+}
+
+export function removeSend(p: Project, trackIdx: number, sendIdx: number): void {
+  const arr = trackSendArr(p, trackIdx);
+  if (!arr || sendIdx < 0 || sendIdx >= arr.length) return;
+  p.doc.transact(() => arr.delete(sendIdx, 1));
+}
+
+export function setSendLevel(
+  p: Project,
+  trackIdx: number,
+  sendIdx: number,
+  level: number,
+): void {
+  const arr = trackSendArr(p, trackIdx);
+  if (!arr || sendIdx < 0 || sendIdx >= arr.length) return;
+  arr.get(sendIdx)?.set('level', level);
+}
+
+/// List the tracks that can be a send target (i.e. all Bus tracks
+/// that aren't the sender itself).
+export function listBusTargets(p: Project, fromTrackIdx: number): { id: string; name: string; idx: number }[] {
+  const fromId = fromTrackIdx >= 0 && fromTrackIdx < p.tracks.length ? p.tracks.get(fromTrackIdx) : null;
+  const out: { id: string; name: string; idx: number }[] = [];
+  for (let i = 0; i < p.tracks.length; i++) {
+    const tid = p.tracks.get(i);
+    if (tid === fromId) continue;
+    const t = p.trackById.get(tid);
+    if (t?.get('kind') !== 'Bus') continue;
+    out.push({
+      id: tid,
+      name: (t.get('name') as string | undefined) ?? `Bus ${i + 1}`,
+      idx: i,
+    });
+  }
+  return out;
+}
+
 /// Insert FX chain helpers — Phase-4 M1. Each insert is a Y.Map with
 /// pluginId, params (Y.Map<paramId-string, number>), and bypass.
 export type InsertPluginId = 'builtin:gain';
