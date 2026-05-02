@@ -56,6 +56,7 @@
   import {
     attachRootSync,
     attachSatelliteSync,
+    type AwarenessState,
     type RootHandle,
     type SatelliteIntent,
   } from './lib/satellite';
@@ -250,10 +251,49 @@
       handleSatelliteIntent(intent);
     });
 
+    // Phase-6 M5: peer awareness — listen for satellites' published
+    // state. Transport position published by root flows the other
+    // way (publishPlayheadAwareness below).
+    rootSyncHandle.onAwareness((wid, state) => {
+      peerAwareness = { ...peerAwareness, [wid]: state };
+    });
+
     exposeBridgeHandle(bridge);
   });
 
-  let rootSyncHandle: RootHandle | null = null;
+  // Phase-6 M5: tick-publishing loop. Runs while transport is on,
+  // publishes the engine's current_tick at ~30 Hz over the
+  // BroadcastChannel as awareness state — satellites (PIP, popups)
+  // mirror playhead position without writing to the persistent
+  // Y.Doc.
+  let peerAwareness = $state<Record<string, AwarenessState>>({});
+  let publishedPlayheadTick = $state(0);
+
+  $effect(() => {
+    if (!rootSyncHandle || !bridge) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      const t = await audio.debugRead('currentTick');
+      publishedPlayheadTick = t;
+      rootSyncHandle?.publishAwareness({
+        kind: 'root',
+        playheadTick: t,
+        focusedPanel: selectedTrackKind ?? undefined,
+      });
+    };
+    // setInterval for reliability in headless Chromium (rAF throttles
+    // in occluded tabs); ~30 Hz is a reasonable awareness publish
+    // cadence for a transport-position cursor.
+    const id = setInterval(tick, 33);
+    void tick();
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  });
+
+  let rootSyncHandle = $state<RootHandle | null>(null);
 
   // Phase-6 M3: PIP transport. Lazy-create the controller; bindings
   // close over the live project + bridge so the polling loop in
@@ -540,6 +580,9 @@
             pipPlaying = false;
             bridge.setTransport(false);
           },
+          // Phase-6 M5 awareness inspectors.
+          publishedPlayheadTick: () => publishedPlayheadTick,
+          peerAwareness: () => peerAwareness,
           // Phase-4 M5 Container backdoor. UI for branch editing is
           // deferred to a Phase-9 polish pass.
           addContainerInsert: (trackIdx: number) => {

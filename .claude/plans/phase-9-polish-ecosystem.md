@@ -176,6 +176,30 @@ editor is open work:
 - Phase 6 popups don't restore on reload. Save layout (which panels
   open, where) per project or per machine.
 
+### More popup-able panels (carry-over from Phase 6 M4)
+
+Phase-6 M4 ships the satellite-popup architecture and wires the
+Mixer's "pop out" affordance. The same pattern applies to:
+
+- PianoRoll.svelte (pop the editor onto a second monitor while
+  using a controller / DAW for transport on the main screen).
+- PluginPanel.svelte / TransportBar.svelte (when one exists).
+- AudioTrackView (region-edit + waveform thumb in a tall window).
+
+Each is a per-component `onPopout` wiring + a branch in
+SatellitePopup.svelte's panel switch.
+
+### Awareness-driven UI (carry-over from Phase 6 M5)
+
+Phase-6 M5 publishes root's playhead tick over awareness so popups
+can mirror it. The matching read-side polish:
+
+- Visible playhead in PIP transport panel + popup mixer (currently
+  just exposed via __bridge for tests).
+- Cross-window selection / cursor highlighting.
+- Phase 8 reuses this same channel for collaborator presence
+  (avatars + cursors).
+
 ### Account system / persistent identity
 
 - Sign-in (passkey or OAuth).

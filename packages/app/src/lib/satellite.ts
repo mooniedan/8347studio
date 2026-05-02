@@ -59,6 +59,9 @@ type SyncMsg =
 
 export interface AwarenessState {
   kind: 'root' | 'pip' | 'popup';
+  /// String label for whichever panel currently holds focus in this
+  /// window — root uses the selected track kind, satellites use their
+  /// hosting panel name.
   focusedPanel?: string;
   /// Ephemeral playhead position. Phase-6 M5 uses this to scrub
   /// across windows without writing to the persistent Y.Doc.
@@ -67,6 +70,11 @@ export interface AwarenessState {
 }
 
 export interface RootHandle {
+  /// Publish this root's awareness state (kind: 'root', plus playhead
+  /// tick / focused panel / selection). Phase-6 M5.
+  publishAwareness(state: AwarenessState): void;
+  /// Subscribe to awareness updates from other windows.
+  onAwareness(cb: (windowId: string, state: AwarenessState) => void): () => void;
   destroy(): void;
 }
 
@@ -90,6 +98,8 @@ export function attachRootSync(
   onIntent: RootIntentHandler,
 ): RootHandle {
   const ch = new BroadcastChannel(CHANNEL_NAME);
+  const windowId = makeWindowId();
+  const awarenessSubs = new Set<(id: string, s: AwarenessState) => void>();
 
   const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
     if (origin === REMOTE_ORIGIN) return;
@@ -116,12 +126,25 @@ export function attachRootSync(
       // observer doesn't bounce it back. Yjs CRDT semantics make
       // any concurrent-edit overlap benign.
       Y.applyUpdate(doc, msg.bytes, REMOTE_ORIGIN);
+    } else if (msg.type === 'awareness' && msg.windowId !== windowId) {
+      for (const cb of awarenessSubs) cb(msg.windowId, msg.state);
     }
   };
 
   return {
+    publishAwareness(state) {
+      const msg: AwarenessMsg = { type: 'awareness', windowId, state };
+      ch.postMessage(msg);
+    },
+    onAwareness(cb) {
+      awarenessSubs.add(cb);
+      return () => {
+        awarenessSubs.delete(cb);
+      };
+    },
     destroy() {
       doc.off('update', onLocalUpdate);
+      awarenessSubs.clear();
       ch.close();
     },
   };
