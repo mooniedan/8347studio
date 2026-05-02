@@ -55,7 +55,14 @@ pub struct InsertSnapshot {
 pub enum InsertKind {
     /// First-party Gain — clean amplitude scaler. Phase-4 M1 fixture.
     Gain,
-    // Phase-4 M3 will append EQ, Compressor, Reverb, Delay.
+    /// 4-band parametric. Phase-4 M3.
+    Eq,
+    /// Feedforward peak compressor. Phase-4 M3.
+    Compressor,
+    /// Schroeder algorithmic reverb. Phase-4 M3.
+    Reverb,
+    /// Mono delay with shaped feedback. Phase-4 M3.
+    Delay,
     // Phase-4 M5 appends Container.
 }
 

@@ -311,6 +311,18 @@ function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
 // InsertKind discriminants — must match
 // crates/audio-engine/src/snapshot.rs::InsertKind. Append-only.
 const INSERT_GAIN = 0;
+const INSERT_EQ = 1;
+const INSERT_COMPRESSOR = 2;
+const INSERT_REVERB = 3;
+const INSERT_DELAY = 4;
+
+const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
+  'builtin:gain': INSERT_GAIN,
+  'builtin:eq': INSERT_EQ,
+  'builtin:compressor': INSERT_COMPRESSOR,
+  'builtin:reverb': INSERT_REVERB,
+  'builtin:delay': INSERT_DELAY,
+};
 
 function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
   const arr = track.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
@@ -321,7 +333,7 @@ function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
   const known: { kind: number; entries: [number, number][]; bypass: boolean }[] = [];
   arr.forEach((slot) => {
     const pid = slot.get('pluginId') as string | undefined;
-    if (pid !== 'builtin:gain') return;
+    if (!pid || !(pid in INSERT_KIND_BY_PLUGIN_ID)) return;
     const params = slot.get('params') as Y.Map<unknown> | undefined;
     const entries: [number, number][] = [];
     params?.forEach((v, k) => {
@@ -329,7 +341,7 @@ function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
       if (!Number.isNaN(id) && typeof v === 'number') entries.push([id, v]);
     });
     known.push({
-      kind: INSERT_GAIN,
+      kind: INSERT_KIND_BY_PLUGIN_ID[pid],
       entries,
       bypass: Boolean(slot.get('bypass')),
     });

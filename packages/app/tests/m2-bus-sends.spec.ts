@@ -68,10 +68,13 @@ test.describe('phase-4 / M2 bus tracks + send routing', () => {
 
     // Switch to the bus and add a Gain × 2 insert.
     await page.click(`[data-testid="track-row-${busIdx}"]`);
-    await page.click('[data-testid="insert-add-gain"]');
+    await page.selectOption('[data-testid="insert-add"]', 'builtin:gain');
     await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="insert-0-gain"]') as HTMLInputElement;
-      el.value = '2';
+      const el = document.querySelector(
+        '[data-testid="insert-0-param-0-input"]',
+      ) as HTMLInputElement;
+      // Gain descriptor is linear 0..2; position 1 → value 2.
+      el.value = '1';
       el.dispatchEvent(new Event('input', { bubbles: true }));
     });
 

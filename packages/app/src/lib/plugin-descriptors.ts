@@ -102,3 +102,53 @@ export function descriptorById(
 ): ParamDescriptor | null {
   return list.find((d) => d.id === id) ?? null;
 }
+
+// ---- Phase-4 M1: Gain descriptors ----------------------------------
+
+export const GAIN_DESCRIPTORS: ParamDescriptor[] = [
+  { id: 0, name: 'Gain', min: 0, max: 2, default: 1, unit: 'none', curve: 'linear', group: 'gain' },
+];
+
+// ---- Phase-4 M3: 4 first-party effects -----------------------------
+
+const ENABLE_OPTS = ['Off', 'On'];
+
+function band(prefix: string, group: string, baseId: number, freqDefault: number, qDefault: number): ParamDescriptor[] {
+  return [
+    { id: baseId,     name: `${prefix} Freq`, min: 20,    max: 20000, default: freqDefault, unit: 'hz',   curve: 'exp',    group },
+    { id: baseId + 1, name: `${prefix} Gain`, min: -24,   max: 24,    default: 0,           unit: 'db',   curve: 'linear', group },
+    { id: baseId + 2, name: `${prefix} Q`,    min: 0.1,   max: 10,    default: qDefault,    unit: 'none', curve: 'exp',    group },
+    { id: baseId + 3, name: `${prefix} On`,   min: 0,     max: 1,     default: 1,           unit: 'none', curve: 'linear', group, options: ENABLE_OPTS },
+  ];
+}
+
+export const EQ_DESCRIPTORS: ParamDescriptor[] = [
+  ...band('Lo',  'lo',     0,  100,  0.707),
+  ...band('LM',  'lo_mid', 4,  400,  1.0),
+  ...band('HM',  'hi_mid', 8,  2000, 1.0),
+  ...band('Hi',  'hi',     12, 8000, 0.707),
+];
+
+export const COMPRESSOR_DESCRIPTORS: ParamDescriptor[] = [
+  { id: 0, name: 'Threshold', min: -60,    max: 0,   default: -18,    unit: 'db',      curve: 'linear', group: 'comp' },
+  { id: 1, name: 'Ratio',     min: 1,      max: 20,  default: 4,      unit: 'none',    curve: 'exp',    group: 'comp' },
+  { id: 2, name: 'Attack',    min: 0.001,  max: 0.5, default: 0.005,  unit: 'seconds', curve: 'exp',    group: 'comp' },
+  { id: 3, name: 'Release',   min: 0.01,   max: 2,   default: 0.1,    unit: 'seconds', curve: 'exp',    group: 'comp' },
+  { id: 4, name: 'Makeup',    min: 0,      max: 24,  default: 0,      unit: 'db',      curve: 'linear', group: 'comp' },
+  { id: 5, name: 'Knee',      min: 0,      max: 12,  default: 6,      unit: 'db',      curve: 'linear', group: 'comp' },
+];
+
+export const REVERB_DESCRIPTORS: ParamDescriptor[] = [
+  { id: 0, name: 'Pre-Delay', min: 0, max: 100, default: 10,  unit: 'ms',   curve: 'linear', group: 'rev' },
+  { id: 1, name: 'Room',      min: 0, max: 1,   default: 0.7, unit: 'none', curve: 'linear', group: 'rev' },
+  { id: 2, name: 'Damping',   min: 0, max: 1,   default: 0.4, unit: 'none', curve: 'linear', group: 'rev' },
+  { id: 3, name: 'Mix',       min: 0, max: 1,   default: 0.3, unit: 'none', curve: 'linear', group: 'rev' },
+];
+
+export const DELAY_DESCRIPTORS: ParamDescriptor[] = [
+  { id: 0, name: 'Time',     min: 1,   max: 2000,  default: 250,  unit: 'ms',   curve: 'exp',    group: 'delay' },
+  { id: 1, name: 'Feedback', min: 0,   max: 0.95,  default: 0.4,  unit: 'none', curve: 'linear', group: 'delay' },
+  { id: 2, name: 'High Cut', min: 200, max: 20000, default: 8000, unit: 'hz',   curve: 'exp',    group: 'delay' },
+  { id: 3, name: 'Low Cut',  min: 20,  max: 2000,  default: 100,  unit: 'hz',   curve: 'exp',    group: 'delay' },
+  { id: 4, name: 'Mix',      min: 0,   max: 1,     default: 0.3,  unit: 'none', curve: 'linear', group: 'delay' },
+];

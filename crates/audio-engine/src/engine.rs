@@ -2,7 +2,11 @@ use crate::clip_scheduler::{ClipScheduler, ScheduledNote};
 use crate::event::Event;
 use crate::oscillator::Waveform;
 use crate::plugin::{Plugin, Silence};
+use crate::plugins::compressor::Compressor;
+use crate::plugins::delay::Delay;
+use crate::plugins::eq::Eq;
 use crate::plugins::gain::Gain;
+use crate::plugins::reverb::Reverb;
 use crate::plugins::subtractive::Subtractive;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
@@ -121,6 +125,10 @@ impl Engine {
             for ins in ts.inserts.iter() {
                 let mut plugin: Box<dyn Plugin> = match ins.kind {
                     InsertKind::Gain => Box::new(Gain::new()),
+                    InsertKind::Eq => Box::new(Eq::new(self.sample_rate)),
+                    InsertKind::Compressor => Box::new(Compressor::new(self.sample_rate)),
+                    InsertKind::Reverb => Box::new(Reverb::new(self.sample_rate)),
+                    InsertKind::Delay => Box::new(Delay::new(self.sample_rate)),
                 };
                 for &(id, value) in &ins.params {
                     plugin.set_param(id, value);

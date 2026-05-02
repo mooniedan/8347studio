@@ -40,12 +40,14 @@ test.describe('phase-4 / M1 insert FX chain', () => {
       .toBeGreaterThan(0.05);
 
     // Add a Gain insert on this track.
-    await page.click('[data-testid="insert-add-gain"]');
+    await page.selectOption('[data-testid="insert-add"]', 'builtin:gain');
     await expect(page.locator('[data-testid="insert-slot-0"]')).toBeVisible();
 
     // Pull the slot's gain to 0.
     await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="insert-0-gain"]') as HTMLInputElement;
+      const el = document.querySelector(
+        '[data-testid="insert-0-param-0-input"]',
+      ) as HTMLInputElement;
       el.value = '0';
       el.dispatchEvent(new Event('input', { bubbles: true }));
     });
@@ -71,8 +73,8 @@ test.describe('phase-4 / M1 insert FX chain', () => {
     await page.click('[data-testid="add-synth-track"]');
 
     // Add two Gain inserts.
-    await page.click('[data-testid="insert-add-gain"]');
-    await page.click('[data-testid="insert-add-gain"]');
+    await page.selectOption('[data-testid="insert-add"]', 'builtin:gain');
+    await page.selectOption('[data-testid="insert-add"]', 'builtin:gain');
     await expect(page.locator('[data-testid^="insert-slot-"]')).toHaveCount(2);
 
     // Remove the first.

@@ -595,15 +595,29 @@ export function listBusTargets(p: Project, fromTrackIdx: number): { id: string; 
   return out;
 }
 
-/// Insert FX chain helpers — Phase-4 M1. Each insert is a Y.Map with
+/// Insert FX chain helpers — Phase-4 M1 (Gain) extended in M3 with
+/// EQ, Compressor, Reverb, Delay. Each insert is a Y.Map with
 /// pluginId, params (Y.Map<paramId-string, number>), and bypass.
-export type InsertPluginId = 'builtin:gain';
+export type InsertPluginId =
+  | 'builtin:gain'
+  | 'builtin:eq'
+  | 'builtin:compressor'
+  | 'builtin:reverb'
+  | 'builtin:delay';
 
 export interface InsertView {
   kind: InsertPluginId;
   params: Record<number, number>;
   bypass: boolean;
 }
+
+const INSERT_PLUGIN_IDS: ReadonlySet<string> = new Set([
+  'builtin:gain',
+  'builtin:eq',
+  'builtin:compressor',
+  'builtin:reverb',
+  'builtin:delay',
+]);
 
 function trackInsertArr(p: Project, trackIdx: number): Y.Array<Y.Map<unknown>> | null {
   if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
@@ -619,14 +633,14 @@ export function getTrackInserts(p: Project, trackIdx: number): InsertView[] {
   const out: InsertView[] = [];
   arr.forEach((slot) => {
     const pid = slot.get('pluginId') as string;
-    if (pid !== 'builtin:gain') return;
+    if (!INSERT_PLUGIN_IDS.has(pid)) return;
     const params: Record<number, number> = {};
     const ymap = slot.get('params') as Y.Map<unknown> | undefined;
     ymap?.forEach((v, k) => {
       const id = parseInt(k, 10);
       if (!Number.isNaN(id) && typeof v === 'number') params[id] = v;
     });
-    out.push({ kind: 'builtin:gain', params, bypass: Boolean(slot.get('bypass')) });
+    out.push({ kind: pid as InsertPluginId, params, bypass: Boolean(slot.get('bypass')) });
   });
   return out;
 }
@@ -638,9 +652,7 @@ export function addInsert(p: Project, trackIdx: number, kind: InsertPluginId): v
     const slot = new Y.Map<unknown>();
     slot.set('pluginId', kind);
     slot.set('bypass', false);
-    const params = new Y.Map<unknown>();
-    if (kind === 'builtin:gain') params.set('0', 1.0);
-    slot.set('params', params);
+    slot.set('params', new Y.Map<unknown>());
     arr.push([slot]);
   });
 }
