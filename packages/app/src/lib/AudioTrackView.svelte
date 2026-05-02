@@ -8,7 +8,17 @@
     getAssetMetadata,
   } from './project';
 
-  const { project, trackIdx }: { project: Project; trackIdx: number } = $props();
+  const {
+    project,
+    trackIdx,
+    recording = false,
+    onToggleRecord = () => {},
+  }: {
+    project: Project;
+    trackIdx: number;
+    recording?: boolean;
+    onToggleRecord?: () => void;
+  } = $props();
 
   let regions = $state<AudioRegionView[]>(untrack(() => getAudioRegions(project, trackIdx)));
 
@@ -47,7 +57,18 @@
 <section class="audio-track" data-testid={`audio-track-${trackIdx}`}>
   <header class="head">
     <span class="title">Audio Track</span>
-    <span class="hint">Drag a WAV / MP3 file into the timeline below to import.</span>
+    <button
+      class="record"
+      class:recording
+      data-testid={`audio-track-${trackIdx}-record`}
+      onclick={() => onToggleRecord()}
+      aria-pressed={recording}
+      title="Record from the default microphone (getUserMedia)"
+    >
+      <span class="record-dot"></span>
+      {recording ? 'Stop' : 'Record'}
+    </button>
+    <span class="hint">Drag a WAV / MP3 file in to import, or hit Record.</span>
   </header>
   {#if regions.length === 0}
     <div class="empty" data-testid={`audio-track-${trackIdx}-empty`}>No regions yet.</div>
@@ -99,6 +120,39 @@
   .hint {
     color: #666;
     font-size: 10px;
+  }
+  .record {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 3px 8px;
+    font: 11px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .record:hover {
+    background: #232323;
+  }
+  .record .record-dot {
+    width: 8px;
+    height: 8px;
+    background: #555;
+    border-radius: 50%;
+  }
+  .record.recording {
+    border-color: #ff3a3a;
+    color: #ff8585;
+    background: #2a0e0e;
+  }
+  .record.recording .record-dot {
+    background: #ff3a3a;
+    animation: rec-pulse 1s infinite;
+  }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
   }
   .empty {
     color: #666;

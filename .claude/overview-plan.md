@@ -34,7 +34,7 @@ ones in their own `## Designs` section.
 | ✅ | **2** | Play a real synth with envelopes and write a piano-roll part.            | Plugin trait, first-party synth (subtractive, ADSR, filter), piano-roll clip, MIDI events                       |
 | ✅ | **3** | Hook up a MIDI keyboard and play live.                                   | WebMIDI input, armed-track routing, live recording into clips, basic CC-learn                                   |
 | ✅ | **4** | Shape the sound with effects, sends, and automation.                     | Insert FX chain, send buses, parameter automation lanes, first-party EQ/comp/reverb/delay, container plugin     |
-| ⬜ | **5** | Drag in a sample, record live audio over a beat.                         | Audio track type, audio clip + warp opt-in, OPFS asset store, getUserMedia recording                            |
+| ✅ | **5** | Drag in a sample, record live audio over a beat.                         | Audio track type, audio clip + warp opt-in, OPFS asset store, getUserMedia recording                            |
 | ⬜ | **6** | Control playback from a Picture-in-Picture window.                       | Document PIP transport, popup mixer, BroadcastChannel state sync, satellite render contract                     |
 | ⬜ | **7** | Load a third-party plugin from a URL.                                    | Public plugin SDK: WASM+JS contract, manifest, sandbox boundary, registry list, example external plugin         |
 | ⬜ | **8** | Make a beat with a friend in real time.                                  | y-websocket sync server, awareness (cursors + transport), shared session UI, content-addressed cloud assets     |

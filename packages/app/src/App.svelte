@@ -48,6 +48,8 @@
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
   import * as assetStore from './lib/asset-store';
+  import { createAudioRecorder, type AudioRecorder } from './lib/audio-recorder';
+  import { encodeWavMono16 } from './lib/wav';
 
   // Hydrate the Y.Doc from IndexedDB before mounting the Sequencer.
   // Avoids the race where a fresh UI writes defaults that overwrite a
@@ -68,6 +70,48 @@
     const t = project.trackById.get(id);
     return (t?.get('kind') as string | undefined) ?? null;
   });
+
+  // Phase-5 M5: per-Audio-track recorder state. One recorder at a
+  // time for now; multi-arm rides on the same Phase-9 polish queue
+  // as the MIDI multi-arm item.
+  let audioRecorderInstance: AudioRecorder | null = null;
+  let audioRecordingTrackIdx = $state<number | null>(null);
+
+  async function toggleAudioRecord(trackIdx: number): Promise<void> {
+    if (!project) return;
+    if (audioRecordingTrackIdx === trackIdx && audioRecorderInstance) {
+      const pcm = await audioRecorderInstance.stop();
+      const sampleRate = audioRecorderInstance.sampleRate;
+      audioRecorderInstance.destroy();
+      audioRecorderInstance = null;
+      audioRecordingTrackIdx = null;
+      if (pcm.length > 0) {
+        await recordPcmIntoTrack(trackIdx, pcm, sampleRate);
+      }
+      return;
+    }
+    if (audioRecordingTrackIdx != null) return; // another track armed
+    const ctx = await audio.audioContext();
+    const recorder = await createAudioRecorder(ctx);
+    await recorder.start();
+    audioRecorderInstance = recorder;
+    audioRecordingTrackIdx = trackIdx;
+  }
+
+  /// Phase-5 M5: drop captured Float32 PCM into the addressed Audio
+  /// track. Encodes WAV, runs through the existing asset import path
+  /// (M3) so the snapshot rebuild + register_asset flow does the
+  /// rest. Used by both the live recorder and the test path that
+  /// bypasses getUserMedia.
+  async function recordPcmIntoTrack(
+    trackIdx: number,
+    pcm: Float32Array,
+    sampleRate: number,
+  ): Promise<{ hash: string }> {
+    const bytes = encodeWavMono16(pcm, sampleRate);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return importAssetIntoTrack(trackIdx, bytes, `recording-${stamp}.wav`);
+  }
 
   /// Phase-5 M3: import an audio asset into the addressed Audio track
   /// at tick 0 (full sample length). Hash to OPFS, decode, drop a
@@ -374,6 +418,12 @@
             if (!project) return [];
             return getAudioRegions(project, trackIdx);
           },
+          // Phase-5 M5: bypass-getUserMedia path for tests.
+          recordPcmIntoTrack: (
+            trackIdx: number,
+            pcm: Float32Array,
+            sampleRate: number,
+          ) => recordPcmIntoTrack(trackIdx, pcm, sampleRate),
           // Phase-4 M5 Container backdoor. UI for branch editing is
           // deferred to a Phase-9 polish pass.
           addContainerInsert: (trackIdx: number) => {
@@ -531,7 +581,12 @@
       />
       {#if selectedTrackKind === 'Audio'}
         <div class="track-view">
-          <AudioTrackView {project} trackIdx={selectedTrackIdx} />
+          <AudioTrackView
+            {project}
+            trackIdx={selectedTrackIdx}
+            recording={audioRecordingTrackIdx === selectedTrackIdx}
+            onToggleRecord={() => toggleAudioRecord(selectedTrackIdx)}
+          />
           <InsertSlots {project} trackIdx={selectedTrackIdx} />
           <SendList {project} trackIdx={selectedTrackIdx} />
         </div>
