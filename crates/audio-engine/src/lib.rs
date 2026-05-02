@@ -14,3 +14,4 @@ pub mod sequencer;
 pub mod snapshot;
 pub mod tempo_map;
 pub mod track;
+pub mod warp;

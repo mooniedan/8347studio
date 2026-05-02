@@ -73,6 +73,33 @@ the visual layer here:
 - Param picker ("automate which parameter?") with a tree by
   instrument / insert slot / send.
 
+### Audio region editor polish (carry-over from Phase 5 M3)
+
+Phase-5 M3 ships a minimal Audio track view — region cards with hash
++ filename + tick position. The richer editing the M3 spec lists
+rides here:
+
+- Drag region body to move; drag edges to trim; Alt-drag for slip-
+  edit.
+- Fade-in / fade-out handles on region corners.
+- Inline waveform thumbnail per region (precomputed at import time,
+  cached by hash).
+- Multi-select + bulk move / delete.
+
+### Warp / time-stretch UI + project-tempo re-stretch (carry-over from Phase 5 M4)
+
+Phase-5 M4 shipped the engine OLA time-stretch (warp.rs) with cargo
+correctness tests; the JS-side wiring stays for polish:
+
+- Per-region `Follow tempo` toggle + `Original BPM` hint in the
+  AudioTrackView.
+- engine-bridge resolves region.warpFollowTempo + originalBpm into a
+  pre-stretched PCM keyed by (hash, ratio); registers the stretched
+  result as its own asset id.
+- Re-stretch on project-tempo change (rebuilds affected assets).
+- Higher-quality stretch (WSOLA with similarity matching, or phase
+  vocoder) replaces the naive OLA when transient quality matters.
+
 ### Container branch editor (carry-over from Phase 4 M5)
 
 Phase-4 M5 shipped the Container plugin engine path with a 2-branch
