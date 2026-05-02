@@ -42,6 +42,7 @@
   import { attachBridge, type Bridge } from './lib/engine-bridge';
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
+  import * as assetStore from './lib/asset-store';
 
   // Hydrate the Y.Doc from IndexedDB before mounting the Sequencer.
   // Avoids the race where a fresh UI writes defaults that overwrite a
@@ -308,6 +309,13 @@
             if (!project) return [];
             return listAutomationLanes(project);
           },
+          // Phase-5 M2: OPFS asset store + register_asset path.
+          assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),
+          assetStoreHas: (hash: string) => assetStore.has(hash),
+          assetStoreList: () => assetStore.list(),
+          registerAssetPcm: (assetId: number, pcm: Float32Array) =>
+            audio.postRegisterAsset(assetId, pcm),
+          debugAssetCount: () => audio.debugRead('assetCount'),
           // Phase-4 M5 Container backdoor. UI for branch editing is
           // deferred to a Phase-9 polish pass.
           addContainerInsert: (trackIdx: number) => {

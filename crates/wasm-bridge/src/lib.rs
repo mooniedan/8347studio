@@ -12,6 +12,9 @@ static mut ENGINE: Option<Engine> = None;
 static mut SNAP_BUF: Option<Vec<u8>> = None;
 /// Reusable scratch for inbound SAB events (one event at a time).
 static mut EVENT_BUF: Option<Vec<u8>> = None;
+/// Reusable scratch for incoming asset-PCM uploads (Phase-5 M2).
+/// Holds f32 frames; sized in samples not bytes.
+static mut ASSET_BUF: Option<Vec<f32>> = None;
 
 #[allow(static_mut_refs)]
 unsafe fn engine() -> &'static mut Engine {
@@ -87,6 +90,38 @@ pub extern "C" fn apply_event(len: usize) {
             if let Ok(ev) = event::decode(bytes) {
                 engine().apply_event(ev);
             }
+        }
+    }
+}
+
+/// Reserve `frames` f32 slots in the asset scratch and return a
+/// pointer the host can write decoded PCM into. Followed by
+/// `register_asset(asset_id, frames)`.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn asset_buffer_reserve(frames: usize) -> *mut f32 {
+    unsafe {
+        let buf = ASSET_BUF.get_or_insert_with(Vec::new);
+        if buf.capacity() < frames {
+            buf.reserve(frames - buf.capacity());
+        }
+        buf.clear();
+        buf.resize(frames, 0.0);
+        buf.as_mut_ptr()
+    }
+}
+
+/// Copy the asset scratch into the engine's PCM cache under
+/// `asset_id`. After this returns the buffer can be reused for the
+/// next asset.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn register_asset(asset_id: u32, frames: usize) {
+    unsafe {
+        if let Some(buf) = ASSET_BUF.as_ref() {
+            let take = frames.min(buf.len());
+            let pcm: Vec<f32> = buf[..take].to_vec();
+            engine().register_asset(asset_id, pcm);
         }
     }
 }
@@ -196,6 +231,13 @@ pub extern "C" fn debug_current_tick() -> f64 {
 #[no_mangle]
 pub extern "C" fn debug_bpm() -> f32 {
     unsafe { engine().tempo_map.bpm_at(engine().current_tick()) }
+}
+
+/// How many assets the engine's PCM cache currently holds. Used by
+/// Phase-5 tests to confirm register_asset uploaded.
+#[no_mangle]
+pub extern "C" fn debug_asset_count() -> u32 {
+    unsafe { engine().asset_cache.len() as u32 }
 }
 
 /// Read back a plugin parameter from the addressed track. Returns NaN

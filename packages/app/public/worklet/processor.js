@@ -75,6 +75,13 @@ class DawProcessor extends AudioWorkletProcessor {
       const dst = new Uint8Array(this.exports.memory.buffer, ptr, bytes.length);
       dst.set(bytes);
       this.exports.rebuild_project(bytes.length);
+    } else if (msg.type === 'registerAsset') {
+      // Phase-5 M2: copy decoded PCM into the engine's asset cache.
+      const pcm = msg.pcm; // Float32Array
+      const ptr = this.exports.asset_buffer_reserve(pcm.length);
+      const dst = new Float32Array(this.exports.memory.buffer, ptr, pcm.length);
+      dst.set(pcm);
+      this.exports.register_asset(msg.assetId >>> 0, pcm.length);
     } else if (msg.type === 'debug') {
       let value = NaN;
       if (msg.what === 'trackGain') {
@@ -91,6 +98,8 @@ class DawProcessor extends AudioWorkletProcessor {
         value = this.exports.debug_track_peak(msg.track >>> 0);
       } else if (msg.what === 'trackParam') {
         value = this.exports.debug_track_param(msg.track >>> 0, msg.paramId >>> 0);
+      } else if (msg.what === 'assetCount') {
+        value = this.exports.debug_asset_count();
       }
       this.port.postMessage({ type: 'debug-reply', id: msg.id, what: msg.what, value });
     } else if (msg.type === 'setStepMask') {

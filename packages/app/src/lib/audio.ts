@@ -86,7 +86,14 @@ export async function setWaveform(track: number, w: Waveform): Promise<void> {
 
 /// Test-only: ask the worklet to read a debug export from the wasm engine.
 export async function debugRead(
-  what: 'trackGain' | 'masterGain' | 'trackCount' | 'currentTick' | 'bpm' | 'trackPeak',
+  what:
+    | 'trackGain'
+    | 'masterGain'
+    | 'trackCount'
+    | 'currentTick'
+    | 'bpm'
+    | 'trackPeak'
+    | 'assetCount',
   track = 0,
 ): Promise<number> {
   await ensureReady();
@@ -112,4 +119,25 @@ export async function debugTrackParam(track: number, paramId: number): Promise<n
 export async function postRebuild(bytes: Uint8Array): Promise<void> {
   await ensureReady();
   node!.port.postMessage({ type: 'rebuild', bytes }, [bytes.buffer]);
+}
+
+/// Phase-5 M2: ship decoded PCM to the engine's asset cache. The
+/// worklet copies the buffer into wasm memory, so we transfer the
+/// underlying ArrayBuffer to avoid an extra clone.
+export async function postRegisterAsset(
+  assetId: number,
+  pcm: Float32Array,
+): Promise<void> {
+  await ensureReady();
+  // Send a copy so the caller can keep a reference (the asset-store
+  // decoded cache wants to retain the PCM for re-renders).
+  const copy = new Float32Array(pcm);
+  node!.port.postMessage({ type: 'registerAsset', assetId, pcm: copy }, [copy.buffer]);
+}
+
+/// Provide a fresh-context AudioContext for asset-store decoding —
+/// asset-store needs an AudioContext to call decodeAudioData.
+export async function audioContext(): Promise<AudioContext> {
+  await ensureReady();
+  return ctx!;
 }
