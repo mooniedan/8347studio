@@ -23,6 +23,11 @@
     removeAutomationPoint,
     listAutomationLanes,
     setAssetMetadata,
+    setBpm,
+    setMasterGain,
+    setTrackGain,
+    setTrackMute,
+    setTrackSolo,
     getTrackPluginId,
     getArmedTrackIdx,
     getPianoRollClipForTrack,
@@ -48,6 +53,12 @@
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
   import * as assetStore from './lib/asset-store';
+  import {
+    attachRootSync,
+    attachSatelliteSync,
+    type RootHandle,
+    type SatelliteIntent,
+  } from './lib/satellite';
   import { createAudioRecorder, type AudioRecorder } from './lib/audio-recorder';
   import { encodeWavMono16 } from './lib/wav';
 
@@ -231,10 +242,47 @@
     midi.subscribe(refreshMidi);
     refreshMidi();
 
+    // Phase-6 M1+M2: attach root cross-window sync. Intents from
+    // satellites land here and route to the same project helpers the
+    // root UI uses.
+    rootSyncHandle = attachRootSync(p.doc, (intent) => {
+      handleSatelliteIntent(intent);
+    });
+
     exposeBridgeHandle(bridge);
   });
 
+  let rootSyncHandle: RootHandle | null = null;
+
+  function handleSatelliteIntent(intent: SatelliteIntent): void {
+    if (!project || !bridge) return;
+    switch (intent.kind) {
+      case 'transport':
+        bridge.setTransport(intent.play);
+        break;
+      case 'setBpm':
+        setBpm(project, intent.bpm);
+        break;
+      case 'locate':
+        bridge.locate(intent.tick);
+        break;
+      case 'setMasterGain':
+        setMasterGain(project, intent.gain);
+        break;
+      case 'setTrackGain':
+        setTrackGain(project, intent.track, intent.gain);
+        break;
+      case 'setTrackMute':
+        setTrackMute(project, intent.track, intent.mute);
+        break;
+      case 'setTrackSolo':
+        setTrackSolo(project, intent.track, intent.solo);
+        break;
+    }
+  }
+
   onDestroy(() => {
+    rootSyncHandle?.destroy();
     midi?.destroy();
     bridge?.destroy();
     project?.destroy();
@@ -424,6 +472,17 @@
             pcm: Float32Array,
             sampleRate: number,
           ) => recordPcmIntoTrack(trackIdx, pcm, sampleRate),
+          // Phase-6 M1+M2: in-page satellite for tests. Creates a
+          // satellite handle bound to the same BroadcastChannel root
+          // is listening on; the test exercises the dispatch path.
+          createSatelliteForTest: () => {
+            if (!project) return null;
+            const sat = attachSatelliteSync(project.doc);
+            return {
+              dispatch: (intent: SatelliteIntent) => sat.dispatch(intent),
+              destroy: () => sat.destroy(),
+            };
+          },
           // Phase-4 M5 Container backdoor. UI for branch editing is
           // deferred to a Phase-9 polish pass.
           addContainerInsert: (trackIdx: number) => {
