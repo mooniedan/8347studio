@@ -145,6 +145,17 @@ export const REVERB_DESCRIPTORS: ParamDescriptor[] = [
   { id: 3, name: 'Mix',       min: 0, max: 1,   default: 0.3, unit: 'none', curve: 'linear', group: 'rev' },
 ];
 
+// Container's branch-gain descriptors. Phase-4 M5 ships with a fixed
+// 2-branch shape; the engine supports up to MAX_BRANCHES = 8. The
+// descriptor table here covers branches 0..1 by default; if we extend
+// to user-configurable branch counts in a Phase-9 polish pass, this
+// becomes a per-instance shape (the engine already builds descriptors
+// per Container instance).
+export const CONTAINER_DESCRIPTORS: ParamDescriptor[] = [
+  { id: 0, name: 'Branch 1 Gain', min: 0, max: 2, default: 1, unit: 'none', curve: 'linear', group: 'container' },
+  { id: 1, name: 'Branch 2 Gain', min: 0, max: 2, default: 1, unit: 'none', curve: 'linear', group: 'container' },
+];
+
 export const DELAY_DESCRIPTORS: ParamDescriptor[] = [
   { id: 0, name: 'Time',     min: 1,   max: 2000,  default: 250,  unit: 'ms',   curve: 'exp',    group: 'delay' },
   { id: 1, name: 'Feedback', min: 0,   max: 0.95,  default: 0.4,  unit: 'none', curve: 'linear', group: 'delay' },

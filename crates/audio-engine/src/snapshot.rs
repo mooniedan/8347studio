@@ -78,6 +78,18 @@ pub struct InsertSnapshot {
     pub kind: InsertKind,
     pub params: Vec<(u32, f32)>,
     pub bypass: bool,
+    /// For Container inserts (Phase-4 M5), the parallel branches.
+    /// Empty for non-Container kinds.
+    pub branches: Vec<BranchSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BranchSnapshot {
+    pub gain: f32,
+    /// Each branch is its own plugin chain; outputs sum back at the
+    /// container's mix node. Recursive — a Container inside a branch
+    /// is allowed but rare.
+    pub inserts: Vec<InsertSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +104,10 @@ pub enum InsertKind {
     Reverb,
     /// Mono delay with shaped feedback. Phase-4 M3.
     Delay,
-    // Phase-4 M5 appends Container.
+    /// Container — parallel branches summed back at the mix node.
+    /// Phase-4 M5 escape hatch for parallel processing without a
+    /// node-graph editor.
+    Container,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

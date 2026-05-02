@@ -60,6 +60,31 @@ listed in the M4 spec was deferred so M4 could close — pick up here:
 - Exponential / S-curve / log presets.
 - Curve-edit UI: drag tangent handles, curvature slider per segment.
 
+### Graphical automation lane editor (carry-over from Phase 4 M4)
+
+Phase-4 M4 shipped the engine evaluator + Y.Doc data path; today
+points are added/removed via the `__bridge` backdoor only. Pick up
+the visual layer here:
+
+- Per-track lane below the piano-roll / step-seq view.
+- Click-drag to add a point; drag points to move; right-click to
+  change curve type or delete.
+- "Pause + edit knob → create automation point" Live-style flow.
+- Param picker ("automate which parameter?") with a tree by
+  instrument / insert slot / send.
+
+### Container branch editor (carry-over from Phase 4 M5)
+
+Phase-4 M5 shipped the Container plugin engine path with a 2-branch
+default and `__bridge` helpers for sub-insert wiring. The visual
+editor is open work:
+
+- Sub-panel inside an insert slot when the slot is a Container.
+- Per-branch insert chain editor (recursive — same as the top-level
+  InsertSlots component, just nested).
+- Add / remove branches up to MAX_BRANCHES (= 8 in the engine).
+- Per-branch gain / pan visible at a glance.
+
 ### Project export / import bundles (carry-over)
 
 - Export = zip of `{ project.yjs, assets/<sha>.bin, ... }` with a

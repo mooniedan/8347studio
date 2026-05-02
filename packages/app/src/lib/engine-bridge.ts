@@ -315,6 +315,7 @@ const INSERT_EQ = 1;
 const INSERT_COMPRESSOR = 2;
 const INSERT_REVERB = 3;
 const INSERT_DELAY = 4;
+const INSERT_CONTAINER = 5;
 
 const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
   'builtin:gain': INSERT_GAIN,
@@ -322,40 +323,60 @@ const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
   'builtin:compressor': INSERT_COMPRESSOR,
   'builtin:reverb': INSERT_REVERB,
   'builtin:delay': INSERT_DELAY,
+  'builtin:container': INSERT_CONTAINER,
 };
+
+/// Encode a single insert (and its branches if it's a Container).
+/// Returns null if the slot's pluginId is unknown so the caller can
+/// keep the count in sync with the encoded payloads.
+function insertSnapshotBytes(slot: Y.Map<unknown>): Uint8Array | null {
+  const pid = slot.get('pluginId') as string | undefined;
+  if (!pid || !(pid in INSERT_KIND_BY_PLUGIN_ID)) return null;
+  const kindByte = INSERT_KIND_BY_PLUGIN_ID[pid];
+  const params = slot.get('params') as Y.Map<unknown> | undefined;
+  const entries: [number, number][] = [];
+  params?.forEach((v, k) => {
+    const id = parseInt(k, 10);
+    if (!Number.isNaN(id) && typeof v === 'number') entries.push([id, v]);
+  });
+  const parts: Uint8Array[] = [];
+  parts.push(new Uint8Array([kindByte]));
+  parts.push(u32VarintToBytes(entries.length));
+  for (const [id, val] of entries) {
+    parts.push(u32VarintToBytes(id));
+    parts.push(f32ToBytes(val));
+  }
+  parts.push(new Uint8Array([slot.get('bypass') ? 1 : 0]));
+  // Branches for Container plugins. For non-Container slots this
+  // stays empty (matches the Rust struct layout's default).
+  const branches = slot.get('branches') as Y.Array<Y.Map<unknown>> | undefined;
+  const validBranches: Y.Map<unknown>[] = [];
+  branches?.forEach((b) => validBranches.push(b));
+  parts.push(u32VarintToBytes(validBranches.length));
+  for (const branch of validBranches) {
+    parts.push(f32ToBytes((branch.get('gain') as number | undefined) ?? 1.0));
+    const inner = branch.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
+    const innerBytes: Uint8Array[] = [];
+    inner?.forEach((sub) => {
+      const bytes = insertSnapshotBytes(sub);
+      if (bytes) innerBytes.push(bytes);
+    });
+    parts.push(u32VarintToBytes(innerBytes.length));
+    for (const ib of innerBytes) parts.push(ib);
+  }
+  return concat(parts);
+}
 
 function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
   const arr = track.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
   if (!arr || arr.length === 0) return u32VarintToBytes(0);
-  // First, collect known inserts so the count we emit matches the
-  // payloads (skipping unknown plugin ids without messing up the
-  // varint length we already wrote).
-  const known: { kind: number; entries: [number, number][]; bypass: boolean }[] = [];
+  const encoded: Uint8Array[] = [];
   arr.forEach((slot) => {
-    const pid = slot.get('pluginId') as string | undefined;
-    if (!pid || !(pid in INSERT_KIND_BY_PLUGIN_ID)) return;
-    const params = slot.get('params') as Y.Map<unknown> | undefined;
-    const entries: [number, number][] = [];
-    params?.forEach((v, k) => {
-      const id = parseInt(k, 10);
-      if (!Number.isNaN(id) && typeof v === 'number') entries.push([id, v]);
-    });
-    known.push({
-      kind: INSERT_KIND_BY_PLUGIN_ID[pid],
-      entries,
-      bypass: Boolean(slot.get('bypass')),
-    });
+    const bytes = insertSnapshotBytes(slot);
+    if (bytes) encoded.push(bytes);
   });
-  const parts: Uint8Array[] = [u32VarintToBytes(known.length)];
-  for (const k of known) {
-    parts.push(new Uint8Array([k.kind]));
-    parts.push(u32VarintToBytes(k.entries.length));
-    for (const [id, val] of k.entries) {
-      parts.push(u32VarintToBytes(id));
-      parts.push(f32ToBytes(val));
-    }
-    parts.push(new Uint8Array([k.bypass ? 1 : 0]));
-  }
+  const parts: Uint8Array[] = [u32VarintToBytes(encoded.length)];
+  for (const e of encoded) parts.push(e);
   return concat(parts);
 }
 

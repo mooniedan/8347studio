@@ -11,6 +11,10 @@
     createProject,
     addSubtractiveTrack,
     addBusTrack,
+    addInsert,
+    addContainerSubInsert,
+    setContainerBranchGain,
+    setContainerSubInsertParam,
     addAutomationPoint,
     removeAutomationPoint,
     listAutomationLanes,
@@ -303,6 +307,54 @@
           listAutomationLanes: () => {
             if (!project) return [];
             return listAutomationLanes(project);
+          },
+          // Phase-4 M5 Container backdoor. UI for branch editing is
+          // deferred to a Phase-9 polish pass.
+          addContainerInsert: (trackIdx: number) => {
+            if (!project) return;
+            addInsert(project, trackIdx, 'builtin:container');
+          },
+          addContainerSubInsert: (
+            trackIdx: number,
+            slotIdx: number,
+            branchIdx: number,
+            kind:
+              | 'builtin:gain'
+              | 'builtin:eq'
+              | 'builtin:compressor'
+              | 'builtin:reverb'
+              | 'builtin:delay',
+          ) => {
+            if (!project) return;
+            addContainerSubInsert(project, trackIdx, slotIdx, branchIdx, kind);
+          },
+          setContainerBranchGain: (
+            trackIdx: number,
+            slotIdx: number,
+            branchIdx: number,
+            gain: number,
+          ) => {
+            if (!project) return;
+            setContainerBranchGain(project, trackIdx, slotIdx, branchIdx, gain);
+          },
+          setContainerSubInsertParam: (
+            trackIdx: number,
+            slotIdx: number,
+            branchIdx: number,
+            subIdx: number,
+            paramId: number,
+            value: number,
+          ) => {
+            if (!project) return;
+            setContainerSubInsertParam(
+              project,
+              trackIdx,
+              slotIdx,
+              branchIdx,
+              subIdx,
+              paramId,
+              value,
+            );
           },
         };
       },

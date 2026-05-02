@@ -5,6 +5,7 @@
 
 import {
   COMPRESSOR_DESCRIPTORS,
+  CONTAINER_DESCRIPTORS,
   DELAY_DESCRIPTORS,
   EQ_DESCRIPTORS,
   GAIN_DESCRIPTORS,
@@ -20,7 +21,8 @@ export type PluginId =
   | 'builtin:eq'
   | 'builtin:compressor'
   | 'builtin:reverb'
-  | 'builtin:delay';
+  | 'builtin:delay'
+  | 'builtin:container';
 
 const REGISTRY: Record<string, ParamDescriptor[]> = {
   'builtin:subtractive': SUBTRACTIVE_DESCRIPTORS,
@@ -29,6 +31,7 @@ const REGISTRY: Record<string, ParamDescriptor[]> = {
   'builtin:compressor': COMPRESSOR_DESCRIPTORS,
   'builtin:reverb': REVERB_DESCRIPTORS,
   'builtin:delay': DELAY_DESCRIPTORS,
+  'builtin:container': CONTAINER_DESCRIPTORS,
 };
 
 export const INSERT_PLUGIN_LABELS: Record<string, string> = {
@@ -37,6 +40,7 @@ export const INSERT_PLUGIN_LABELS: Record<string, string> = {
   'builtin:compressor': 'Comp',
   'builtin:reverb': 'Reverb',
   'builtin:delay': 'Delay',
+  'builtin:container': 'Container',
 };
 
 export const INSERT_PLUGIN_ORDER: string[] = [
@@ -45,6 +49,7 @@ export const INSERT_PLUGIN_ORDER: string[] = [
   'builtin:compressor',
   'builtin:reverb',
   'builtin:delay',
+  'builtin:container',
 ];
 
 export function getDescriptors(pluginId: string): ParamDescriptor[] | null {

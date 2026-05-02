@@ -4,15 +4,11 @@ use crate::event::Event;
 use crate::snapshot::{AutoTarget, AutomationLane};
 use crate::oscillator::Waveform;
 use crate::plugin::{Plugin, Silence};
-use crate::plugins::compressor::Compressor;
-use crate::plugins::delay::Delay;
-use crate::plugins::eq::Eq;
-use crate::plugins::gain::Gain;
-use crate::plugins::reverb::Reverb;
+use crate::plugins::build_insert_plugin;
 use crate::plugins::subtractive::Subtractive;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
-use crate::snapshot::{InsertKind, InstrumentSnapshot, ProjectSnapshot};
+use crate::snapshot::{InstrumentSnapshot, ProjectSnapshot};
 use crate::tempo_map::TempoMap;
 use crate::track::{InsertSlot, Send, TrackEngine};
 
@@ -130,16 +126,7 @@ impl Engine {
             // (M3) and rebuilding throws away expensive state.
             self.tracks[i].inserts.clear();
             for ins in ts.inserts.iter() {
-                let mut plugin: Box<dyn Plugin> = match ins.kind {
-                    InsertKind::Gain => Box::new(Gain::new()),
-                    InsertKind::Eq => Box::new(Eq::new(self.sample_rate)),
-                    InsertKind::Compressor => Box::new(Compressor::new(self.sample_rate)),
-                    InsertKind::Reverb => Box::new(Reverb::new(self.sample_rate)),
-                    InsertKind::Delay => Box::new(Delay::new(self.sample_rate)),
-                };
-                for &(id, value) in &ins.params {
-                    plugin.set_param(id, value);
-                }
+                let plugin = build_insert_plugin(self.sample_rate, ins);
                 self.tracks[i].inserts.push(InsertSlot {
                     plugin,
                     bypass: ins.bypass,
@@ -1035,11 +1022,13 @@ mod tests {
                         kind: InsertKind::Gain,
                         params: alloc::vec![(0, 0.5)],
                         bypass: false,
+                        branches: alloc::vec![],
                     },
                     InsertSnapshot {
                         kind: InsertKind::Gain,
                         params: alloc::vec![(0, 0.5)],
                         bypass: false,
+                        branches: alloc::vec![],
                     },
                 ],
                 sends: alloc::vec![],
@@ -1085,11 +1074,13 @@ mod tests {
                         kind: InsertKind::Gain,
                         params: alloc::vec![(0, 0.5)],
                         bypass: true, // first insert bypassed
+                        branches: alloc::vec![],
                     },
                     InsertSnapshot {
                         kind: InsertKind::Gain,
                         params: alloc::vec![(0, 0.5)],
                         bypass: false,
+                        branches: alloc::vec![],
                     },
                 ],
                 sends: alloc::vec![],
@@ -1159,6 +1150,7 @@ mod tests {
                         kind: InsertKind::Gain,
                         params: alloc::vec![(0, 2.0)],
                         bypass: false,
+                        branches: alloc::vec![],
                     }],
                     sends: alloc::vec![],
                 },

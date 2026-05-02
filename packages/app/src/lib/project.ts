@@ -746,7 +746,8 @@ export type InsertPluginId =
   | 'builtin:eq'
   | 'builtin:compressor'
   | 'builtin:reverb'
-  | 'builtin:delay';
+  | 'builtin:delay'
+  | 'builtin:container';
 
 export interface InsertView {
   kind: InsertPluginId;
@@ -760,6 +761,7 @@ const INSERT_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'builtin:compressor',
   'builtin:reverb',
   'builtin:delay',
+  'builtin:container',
 ]);
 
 function trackInsertArr(p: Project, trackIdx: number): Y.Array<Y.Map<unknown>> | null {
@@ -796,8 +798,91 @@ export function addInsert(p: Project, trackIdx: number, kind: InsertPluginId): v
     slot.set('pluginId', kind);
     slot.set('bypass', false);
     slot.set('params', new Y.Map<unknown>());
+    if (kind === 'builtin:container') {
+      // Default: 2 empty branches so parallel routing exists out of
+      // the box; user can add inserts inside each via the bridge
+      // helpers below (UI for branch editing is a Phase-9 polish
+      // item).
+      const branches = new Y.Array<Y.Map<unknown>>();
+      for (let i = 0; i < 2; i++) {
+        const b = new Y.Map<unknown>();
+        b.set('gain', 1.0);
+        b.set('inserts', new Y.Array<Y.Map<unknown>>());
+        branches.push([b]);
+      }
+      slot.set('branches', branches);
+    }
     arr.push([slot]);
   });
+}
+
+/// Add a sub-insert inside a Container slot's branch. Phase-4 M5.
+/// Errors silently when the addressed slot isn't a Container or the
+/// branch index is out of range.
+export function addContainerSubInsert(
+  p: Project,
+  trackIdx: number,
+  slotIdx: number,
+  branchIdx: number,
+  kind: InsertPluginId,
+): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr || slotIdx < 0 || slotIdx >= arr.length) return;
+  const slot = arr.get(slotIdx);
+  if (slot.get('pluginId') !== 'builtin:container') return;
+  const branches = slot.get('branches') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!branches || branchIdx < 0 || branchIdx >= branches.length) return;
+  const branch = branches.get(branchIdx);
+  const inner = branch.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!inner) return;
+  p.doc.transact(() => {
+    const sub = new Y.Map<unknown>();
+    sub.set('pluginId', kind);
+    sub.set('bypass', false);
+    sub.set('params', new Y.Map<unknown>());
+    inner.push([sub]);
+  });
+}
+
+export function setContainerBranchGain(
+  p: Project,
+  trackIdx: number,
+  slotIdx: number,
+  branchIdx: number,
+  gain: number,
+): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr || slotIdx < 0 || slotIdx >= arr.length) return;
+  const slot = arr.get(slotIdx);
+  if (slot.get('pluginId') !== 'builtin:container') return;
+  const branches = slot.get('branches') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!branches || branchIdx < 0 || branchIdx >= branches.length) return;
+  branches.get(branchIdx)?.set('gain', gain);
+}
+
+export function setContainerSubInsertParam(
+  p: Project,
+  trackIdx: number,
+  slotIdx: number,
+  branchIdx: number,
+  subIdx: number,
+  paramId: number,
+  value: number,
+): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr || slotIdx < 0 || slotIdx >= arr.length) return;
+  const slot = arr.get(slotIdx);
+  if (slot.get('pluginId') !== 'builtin:container') return;
+  const branches = slot.get('branches') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!branches || branchIdx < 0 || branchIdx >= branches.length) return;
+  const inner = branches.get(branchIdx).get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!inner || subIdx < 0 || subIdx >= inner.length) return;
+  let params = inner.get(subIdx).get('params') as Y.Map<unknown> | undefined;
+  if (!params) {
+    params = new Y.Map<unknown>();
+    inner.get(subIdx).set('params', params);
+  }
+  params.set(String(paramId), value);
 }
 
 export function removeInsert(p: Project, trackIdx: number, slotIdx: number): void {
