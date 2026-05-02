@@ -1,5 +1,7 @@
+use crate::automation::evaluate_lane;
 use crate::clip_scheduler::{ClipScheduler, ScheduledNote};
 use crate::event::Event;
+use crate::snapshot::{AutoTarget, AutomationLane};
 use crate::oscillator::Waveform;
 use crate::plugin::{Plugin, Silence};
 use crate::plugins::compressor::Compressor;
@@ -24,6 +26,10 @@ pub struct Engine {
     /// Filled each block by the sends of earlier tracks; consumed by
     /// the bus track itself (kind == Bus) when its turn comes.
     bus_inputs: Vec<Vec<f32>>,
+    /// Automation lanes. Phase-4 M4. Mirrored from the snapshot;
+    /// evaluated each audio block at current_tick and written into
+    /// the addressed plugin's set_param.
+    automation: Vec<AutomationLane>,
     pub master_gain: f32,
     pub tempo_map: TempoMap,
     pub playing: bool,
@@ -39,6 +45,7 @@ impl Engine {
             tracks: Vec::new(),
             track_schedulers: Vec::new(),
             bus_inputs: Vec::new(),
+            automation: Vec::new(),
             master_gain: 1.0,
             tempo_map: TempoMap::new(sample_rate),
             playing: false,
@@ -172,6 +179,9 @@ impl Engine {
                 .collect();
             self.track_schedulers[i].replace_notes(notes);
         }
+        // Replace automation wholesale. Phase-9 polish can keep stable
+        // identity to avoid throwing away a mid-edit smoothing state.
+        self.automation = snap.automation.clone();
     }
 
     pub fn add_track(&mut self, track: TrackEngine) -> usize {
@@ -300,6 +310,10 @@ impl Engine {
         self.advance_tick(frames);
         let next_tick = self.current_tick();
         self.fire_track_schedulers(prev_tick, next_tick);
+        // Apply automation BEFORE rendering so this block sees the
+        // automated value. Block-quantized resolution; sub-block
+        // ramps are a future polish item.
+        self.apply_automation(next_tick);
         for s in left.iter_mut() {
             *s = 0.0;
         }
@@ -360,6 +374,34 @@ impl Engine {
         }
         for s in right.iter_mut() {
             *s *= self.master_gain;
+        }
+    }
+
+    fn apply_automation(&mut self, tick: u64) {
+        // Iterate through lanes; for each evaluate at the current tick
+        // and write into the addressed plugin. We can't borrow
+        // self.automation while mutating self.tracks via a normal
+        // iterator (split borrow on different fields makes this OK).
+        for lane_idx in 0..self.automation.len() {
+            let (track_idx, target, param_id) = {
+                let l = &self.automation[lane_idx];
+                (l.track_idx as usize, l.target, l.param_id)
+            };
+            let value = match evaluate_lane(&self.automation[lane_idx].points, tick) {
+                Some(v) => v,
+                None => continue,
+            };
+            let Some(track) = self.tracks.get_mut(track_idx) else {
+                continue;
+            };
+            match target {
+                AutoTarget::Instrument => track.instrument.set_param(param_id, value),
+                AutoTarget::Insert { slot_idx } => {
+                    if let Some(slot) = track.inserts.get_mut(slot_idx as usize) {
+                        slot.plugin.set_param(param_id, value);
+                    }
+                }
+            }
         }
     }
 
@@ -581,6 +623,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 0.5,
+            automation: alloc::vec![],
             tracks: vec![
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -626,6 +669,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let mut snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "T".into(),
@@ -775,6 +819,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Drums".into(),
@@ -822,6 +867,7 @@ mod tests {
     fn apply_snapshot_round_trips_through_postcard() {
         let snap = ProjectSnapshot {
             master_gain: 0.75,
+            automation: alloc::vec![],
             tracks: vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -887,6 +933,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Synth".into(),
@@ -923,6 +970,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Synth".into(),
@@ -969,6 +1017,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -1019,6 +1068,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -1069,6 +1119,7 @@ mod tests {
         // input signal magnitude.
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -1150,6 +1201,94 @@ mod tests {
     }
 
     #[test]
+    fn automation_lane_drives_subtractive_cutoff_sweep() {
+        use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
+        use crate::snapshot::{AutoPoint, AutoTarget, AutomationLane};
+
+        let mut e = Engine::new(48_000.0);
+        // One subtractive track, cutoff automated 100→8000 Hz over
+        // ticks 0..3840 (one bar at 120 BPM, ppq=960).
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            automation: alloc::vec![AutomationLane {
+                track_idx: 0,
+                target: AutoTarget::Instrument,
+                param_id: PID_FILTER_CUTOFF,
+                points: alloc::vec![
+                    AutoPoint { tick: 0, value: 100.0 },
+                    AutoPoint { tick: 3840, value: 8000.0 },
+                ],
+            }],
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Lead".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
+                sends: alloc::vec![],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.set_playing(true);
+
+        // Render a small block. Engine evaluates automation at the
+        // post-advance tick; with frames=128 at 48k and 120 BPM,
+        // next_tick after one block is ~5 ticks → cutoff still ≈ 100.
+        let mut buf = alloc::vec![0.0f32; 128];
+        e.process_mono(&mut buf);
+        let synth = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .unwrap();
+        let cutoff_early = synth.get_param(PID_FILTER_CUTOFF).unwrap();
+        assert!(
+            (cutoff_early - 100.0).abs() < 50.0,
+            "early cutoff should be near 100, got {}",
+            cutoff_early
+        );
+
+        // Locate to the midpoint of the lane and render again.
+        e.locate(1920);
+        let mut buf2 = alloc::vec![0.0f32; 128];
+        e.process_mono(&mut buf2);
+        let synth = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .unwrap();
+        let cutoff_mid = synth.get_param(PID_FILTER_CUTOFF).unwrap();
+        // Half-way through 100..8000 ≈ 4050.
+        assert!(
+            (cutoff_mid - 4050.0).abs() < 200.0,
+            "mid cutoff should be ≈4050, got {}",
+            cutoff_mid
+        );
+
+        // Locate past the end → cutoff clamps to last value.
+        e.locate(8000);
+        let mut buf3 = alloc::vec![0.0f32; 128];
+        e.process_mono(&mut buf3);
+        let synth = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<Subtractive>()
+            .unwrap();
+        let cutoff_end = synth.get_param(PID_FILTER_CUTOFF).unwrap();
+        assert!(
+            (cutoff_end - 8000.0).abs() < 50.0,
+            "end cutoff should clamp to 8000, got {}",
+            cutoff_end
+        );
+    }
+
+    #[test]
     fn live_note_on_event_routes_to_track_instrument() {
         use crate::plugins::subtractive::Subtractive;
         let mut e = Engine::new(48_000.0);
@@ -1186,6 +1325,7 @@ mod tests {
         // for 1920 ticks (one beat at 120 BPM, ppq=960).
         let snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -1223,6 +1363,7 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let mut snap = ProjectSnapshot {
             master_gain: 1.0,
+            automation: alloc::vec![],
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Synth".into(),

@@ -1,5 +1,6 @@
 extern crate alloc;
 
+pub mod automation;
 pub mod clip_scheduler;
 pub mod engine;
 pub mod event;

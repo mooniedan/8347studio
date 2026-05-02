@@ -13,6 +13,35 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectSnapshot {
     pub master_gain: f32,
     pub tracks: Vec<TrackSnapshot>,
+    /// Automation lanes (Phase-4 M4). Each lane targets one parameter
+    /// on one track's instrument or insert slot and carries a set of
+    /// (tick, value) points evaluated each audio block via linear
+    /// interpolation.
+    pub automation: Vec<AutomationLane>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutomationLane {
+    pub track_idx: u32,
+    pub target: AutoTarget,
+    pub param_id: u32,
+    /// Points sorted by tick. Linear interpolation between adjacent
+    /// points; constant before the first and after the last.
+    pub points: Vec<AutoPoint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum AutoTarget {
+    /// The track's instrument plugin. `slot_idx` is unused.
+    Instrument,
+    /// One of the track's insert slots.
+    Insert { slot_idx: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AutoPoint {
+    pub tick: u64,
+    pub value: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

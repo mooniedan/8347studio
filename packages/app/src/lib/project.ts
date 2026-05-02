@@ -415,6 +415,149 @@ export function getArmedTrackIdx(p: Project): number {
   return p.tracks.toArray().indexOf(id);
 }
 
+/// Automation lanes — Phase-4 M4. Stored under `automation` Y.Map
+/// keyed by `${trackId}:${kind}:${slotIdx}:${paramId}`. Value is a
+/// Y.Map { points: Y.Array<Y.Map<{ tick, value }>> }.
+export type AutoTargetKind = 'instrument' | 'insert';
+
+export interface AutomationPoint {
+  tick: number;
+  value: number;
+}
+
+export interface AutomationLaneView {
+  trackId: string;
+  trackIdx: number;
+  target: AutoTargetKind;
+  slotIdx: number;
+  paramId: number;
+  points: AutomationPoint[];
+}
+
+function automationRoot(p: Project): Y.Map<Y.Map<unknown>> {
+  let m = p.automation as Y.Map<unknown> as unknown as Y.Map<Y.Map<unknown>>;
+  // p.automation is created in createProject — guaranteed.
+  return m;
+}
+
+function laneKey(trackId: string, target: AutoTargetKind, slotIdx: number, paramId: number): string {
+  return `${trackId}:${target}:${slotIdx}:${paramId}`;
+}
+
+function findLane(
+  p: Project,
+  trackIdx: number,
+  target: AutoTargetKind,
+  slotIdx: number,
+  paramId: number,
+): { key: string; lane: Y.Map<unknown>; trackId: string } | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const trackId = p.tracks.get(trackIdx);
+  const key = laneKey(trackId, target, slotIdx, paramId);
+  const lane = automationRoot(p).get(key);
+  return lane ? { key, lane: lane as Y.Map<unknown>, trackId } : null;
+}
+
+export function addAutomationPoint(
+  p: Project,
+  trackIdx: number,
+  target: AutoTargetKind,
+  slotIdx: number,
+  paramId: number,
+  point: AutomationPoint,
+): void {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return;
+  const trackId = p.tracks.get(trackIdx);
+  const root = automationRoot(p);
+  const key = laneKey(trackId, target, slotIdx, paramId);
+  p.doc.transact(() => {
+    let lane = root.get(key) as Y.Map<unknown> | undefined;
+    if (!lane) {
+      lane = new Y.Map<unknown>();
+      lane.set('points', new Y.Array<Y.Map<unknown>>());
+      root.set(key, lane);
+    }
+    const points = lane.get('points') as Y.Array<Y.Map<unknown>>;
+    // Insertion-sorted by tick to keep the engine's evaluation cheap.
+    let insertAt = points.length;
+    for (let i = 0; i < points.length; i++) {
+      const t = (points.get(i).get('tick') as number | undefined) ?? 0;
+      if (t > point.tick) {
+        insertAt = i;
+        break;
+      }
+    }
+    const ymap = new Y.Map<unknown>();
+    ymap.set('tick', Math.max(0, Math.floor(point.tick)));
+    ymap.set('value', point.value);
+    points.insert(insertAt, [ymap]);
+  });
+}
+
+export function removeAutomationPoint(
+  p: Project,
+  trackIdx: number,
+  target: AutoTargetKind,
+  slotIdx: number,
+  paramId: number,
+  pointIdx: number,
+): void {
+  const found = findLane(p, trackIdx, target, slotIdx, paramId);
+  if (!found) return;
+  const points = found.lane.get('points') as Y.Array<Y.Map<unknown>>;
+  if (pointIdx < 0 || pointIdx >= points.length) return;
+  p.doc.transact(() => {
+    points.delete(pointIdx, 1);
+    if (points.length === 0) {
+      automationRoot(p).delete(found.key);
+    }
+  });
+}
+
+export function getAutomationLane(
+  p: Project,
+  trackIdx: number,
+  target: AutoTargetKind,
+  slotIdx: number,
+  paramId: number,
+): AutomationPoint[] {
+  const found = findLane(p, trackIdx, target, slotIdx, paramId);
+  if (!found) return [];
+  const points = found.lane.get('points') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!points) return [];
+  const out: AutomationPoint[] = [];
+  points.forEach((pm) => {
+    const tick = (pm.get('tick') as number | undefined) ?? 0;
+    const value = (pm.get('value') as number | undefined) ?? 0;
+    out.push({ tick, value });
+  });
+  return out;
+}
+
+export function listAutomationLanes(p: Project): AutomationLaneView[] {
+  const out: AutomationLaneView[] = [];
+  const trackIds = p.tracks.toArray();
+  automationRoot(p).forEach((lane, key) => {
+    const parts = key.split(':');
+    if (parts.length !== 4) return;
+    const trackId = parts[0];
+    const target = parts[1] as AutoTargetKind;
+    const slotIdx = parseInt(parts[2], 10);
+    const paramId = parseInt(parts[3], 10);
+    if (Number.isNaN(slotIdx) || Number.isNaN(paramId)) return;
+    const trackIdx = trackIds.indexOf(trackId);
+    const points = (lane.get('points') as Y.Array<Y.Map<unknown>> | undefined) ?? null;
+    const pts: AutomationPoint[] = [];
+    points?.forEach((pm) => {
+      const t = (pm.get('tick') as number | undefined) ?? 0;
+      const v = (pm.get('value') as number | undefined) ?? 0;
+      pts.push({ tick: t, value: v });
+    });
+    out.push({ trackId, trackIdx, target, slotIdx, paramId, points: pts });
+  });
+  return out;
+}
+
 /// MIDI Learn — Phase-3 M4. Store CC# → { trackIdx, paramId }
 /// bindings under `meta.midiBindings`. Phase 9 will key by deviceId
 /// too; for now Phase-3 assumes one hardware controller at a time.

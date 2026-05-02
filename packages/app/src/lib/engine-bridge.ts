@@ -416,6 +416,55 @@ function pianoRollBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8A
   return concat(parts);
 }
 
+// AutoTarget discriminants — must match
+// crates/audio-engine/src/snapshot.rs::AutoTarget. Append-only.
+const AUTO_TARGET_INSTRUMENT = 0;
+const AUTO_TARGET_INSERT = 1;
+
+function automationBytes(project: Project): Uint8Array {
+  const root = (project.automation as unknown) as Y.Map<Y.Map<unknown>>;
+  const trackIds = project.tracks.toArray();
+  const lanes: { trackIdx: number; target: number; slotIdx: number; paramId: number; points: { tick: number; value: number }[] }[] = [];
+  root.forEach((lane, key) => {
+    const parts = key.split(':');
+    if (parts.length !== 4) return;
+    const trackId = parts[0];
+    const target = parts[1];
+    const slotIdx = parseInt(parts[2], 10);
+    const paramId = parseInt(parts[3], 10);
+    const trackIdx = trackIds.indexOf(trackId);
+    if (trackIdx < 0 || Number.isNaN(slotIdx) || Number.isNaN(paramId)) return;
+    const targetByte =
+      target === 'insert' ? AUTO_TARGET_INSERT : AUTO_TARGET_INSTRUMENT;
+    const points = lane.get('points') as Y.Array<Y.Map<unknown>> | undefined;
+    if (!points || points.length === 0) return;
+    const pts: { tick: number; value: number }[] = [];
+    points.forEach((pm) => {
+      const tick = (pm.get('tick') as number | undefined) ?? 0;
+      const value = (pm.get('value') as number | undefined) ?? 0;
+      pts.push({ tick: Math.max(0, Math.floor(tick)), value });
+    });
+    pts.sort((a, b) => a.tick - b.tick);
+    lanes.push({ trackIdx, target: targetByte, slotIdx, paramId, points: pts });
+  });
+  const parts: Uint8Array[] = [u32VarintToBytes(lanes.length)];
+  for (const lane of lanes) {
+    parts.push(u32VarintToBytes(lane.trackIdx));
+    // AutoTarget enum: 0 byte for Instrument; 1 byte + slot_idx varint for Insert.
+    parts.push(new Uint8Array([lane.target]));
+    if (lane.target === AUTO_TARGET_INSERT) {
+      parts.push(u32VarintToBytes(lane.slotIdx));
+    }
+    parts.push(u32VarintToBytes(lane.paramId));
+    parts.push(u32VarintToBytes(lane.points.length));
+    for (const p of lane.points) {
+      parts.push(u64VarintToBytes(p.tick));
+      parts.push(f32ToBytes(p.value));
+    }
+  }
+  return concat(parts);
+}
+
 export function buildSnapshot(project: Project): Uint8Array {
   const masterGain = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
   const trackBytes: Uint8Array[] = [];
@@ -446,7 +495,12 @@ export function buildSnapshot(project: Project): Uint8Array {
       ]),
     );
   }
-  return concat([f32ToBytes(masterGain), u32VarintToBytes(trackBytes.length), ...trackBytes]);
+  return concat([
+    f32ToBytes(masterGain),
+    u32VarintToBytes(trackBytes.length),
+    ...trackBytes,
+    automationBytes(project),
+  ]);
 }
 
 // ---- Public bridge API used by App.svelte -----------------------------
@@ -528,6 +582,10 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   // direct setStepMask path until that path retires).
   const onClipContentChange = () => rebuild();
   project.clipById.observeDeep(onClipContentChange);
+  // Automation lanes — any change inside the lanes Y.Map (point add/
+  // remove/edit) triggers a snapshot rebuild.
+  const onAutomationChange = () => rebuild();
+  project.automation.observeDeep(onAutomationChange);
 
   const onTempoChange = () => {
     const bpm = projectBpm(project);
@@ -676,6 +734,7 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
       project.tempoMap.unobserveDeep(onTempoChange);
       project.clipById.unobserve(onClipChange);
       project.clipById.unobserveDeep(onClipContentChange);
+      project.automation.unobserveDeep(onAutomationChange);
       project.meta.unobserve(onMetaChange);
       project.tracks.unobserve(reattachSynthObservers);
       project.trackById.unobserveDeep(reattachSynthObservers);

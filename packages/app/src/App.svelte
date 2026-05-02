@@ -11,6 +11,9 @@
     createProject,
     addSubtractiveTrack,
     addBusTrack,
+    addAutomationPoint,
+    removeAutomationPoint,
+    listAutomationLanes,
     getTrackPluginId,
     getArmedTrackIdx,
     getPianoRollClipForTrack,
@@ -24,6 +27,7 @@
     PPQ,
     STEP_TICKS,
     type Project,
+    type AutoTargetKind,
   } from './lib/project';
   import {
     SUBTRACTIVE_DESCRIPTORS,
@@ -271,6 +275,34 @@
             if (!project) return [];
             const clip = getPianoRollClipForTrack(project, trackIdx);
             return clip ? readPianoRollNotes(clip) : [];
+          },
+          // Phase-4 M4 automation backdoor. Phase-9 polish lays a real
+          // graphical lane editor; today we expose the data path so
+          // tests can exercise the engine evaluation.
+          addAutomationPoint: (
+            trackIdx: number,
+            target: AutoTargetKind,
+            slotIdx: number,
+            paramId: number,
+            tick: number,
+            value: number,
+          ) => {
+            if (!project) return;
+            addAutomationPoint(project, trackIdx, target, slotIdx, paramId, { tick, value });
+          },
+          removeAutomationPoint: (
+            trackIdx: number,
+            target: AutoTargetKind,
+            slotIdx: number,
+            paramId: number,
+            pointIdx: number,
+          ) => {
+            if (!project) return;
+            removeAutomationPoint(project, trackIdx, target, slotIdx, paramId, pointIdx);
+          },
+          listAutomationLanes: () => {
+            if (!project) return [];
+            return listAutomationLanes(project);
           },
         };
       },
