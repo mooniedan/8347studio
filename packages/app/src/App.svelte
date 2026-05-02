@@ -8,6 +8,12 @@
   import InsertSlots from './lib/InsertSlots.svelte';
   import SendList from './lib/SendList.svelte';
   import AudioTrackView from './lib/AudioTrackView.svelte';
+  import ProjectsMenu from './lib/ProjectsMenu.svelte';
+  import {
+    ensureDefaultProject,
+    loadRegistry,
+    setLastOpenedProject,
+  } from './lib/project-registry';
   import {
     createProject,
     addSubtractiveTrack,
@@ -70,6 +76,7 @@
   let project = $state<Project | null>(null);
   let bridge = $state<Bridge | null>(null);
   let selectedTrackIdx = $state(0);
+  let activeProjectId = $state<string | null>(null);
   // Tracks the selected track's plugin id so the panel re-mounts on
   // synth-track switch and disappears for non-synth tracks.
   let selectedPluginId = $derived.by(() => {
@@ -181,7 +188,14 @@
   let learnActive = $state(false);
   let learnPendingCC = $state<number | null>(null);
 
-  const ready = createProject().then(async (p) => {
+  const initialRegistry = ensureDefaultProject();
+  const initialProject =
+    initialRegistry.projects.find((p) => p.id === initialRegistry.lastOpenedId) ??
+    initialRegistry.projects[0];
+  activeProjectId = initialProject.id;
+
+  async function bootProject(docName: string): Promise<void> {
+    const p = await createProject({ docName });
     project = p;
     exposeDebugHandle(p);
     const { ring } = await audio.ensureReady();
@@ -259,7 +273,31 @@
     });
 
     exposeBridgeHandle(bridge);
-  });
+  }
+
+  const ready = bootProject(initialProject.docName);
+
+  async function switchProject(id: string): Promise<void> {
+    if (id === activeProjectId) return;
+    const reg = loadRegistry();
+    const next = reg.projects.find((p) => p.id === id);
+    if (!next) return;
+    // Tear down the live wiring bound to the old project.
+    pipController?.destroy();
+    pipController = null;
+    rootSyncHandle?.destroy();
+    rootSyncHandle = null;
+    midi?.destroy();
+    midi = null;
+    bridge?.destroy();
+    bridge = null;
+    project?.destroy();
+    project = null;
+    setLastOpenedProject(id);
+    activeProjectId = id;
+    selectedTrackIdx = 0;
+    await bootProject(next.docName);
+  }
 
   // Phase-6 M5: tick-publishing loop. Runs while transport is on,
   // publishes the engine's current_tick at ~30 Hz over the
@@ -643,6 +681,10 @@
   {#if project && bridge}
     <h1>8347 Studio</h1>
     <div class="toolbar">
+      <ProjectsMenu
+        activeProjectId={activeProjectId}
+        onSwitch={(id) => void switchProject(id)}
+      />
       <button
         class="add-synth"
         data-testid="add-synth-track"
@@ -744,6 +786,7 @@
         {/if}
       </div>
     </div>
+    {#key activeProjectId}
     <div class="layout">
       <TrackList
         {project}
@@ -789,6 +832,7 @@
         window.open('?panel=mixer', 'mixer-popup', 'width=420,height=420');
       }}
     />
+    {/key}
   {/if}
 {/await}
 

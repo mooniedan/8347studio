@@ -45,9 +45,18 @@ interface LegacyHash {
   waveform: Waveform | null;
 }
 
-export async function createProject(): Promise<Project> {
+export interface CreateProjectOptions {
+  /// IndexedDB store name. Defaults to PROJECT_DOC_NAME so the
+  /// pre-multi-project setup keeps working unchanged. The multi-
+  /// project flow (lib/project-registry.ts) passes a per-project
+  /// docName so each project has its own IDB store.
+  docName?: string;
+}
+
+export async function createProject(opts: CreateProjectOptions = {}): Promise<Project> {
+  const docName = opts.docName ?? PROJECT_DOC_NAME;
   const doc = new Y.Doc();
-  const provider = new IndexeddbPersistence(PROJECT_DOC_NAME, doc);
+  const provider = new IndexeddbPersistence(docName, doc);
   const project: Project = attach(doc, () => provider.destroy());
   await provider.whenSynced;
 
