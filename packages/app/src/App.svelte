@@ -7,10 +7,14 @@
   import PianoRoll from './lib/PianoRoll.svelte';
   import InsertSlots from './lib/InsertSlots.svelte';
   import SendList from './lib/SendList.svelte';
+  import AudioTrackView from './lib/AudioTrackView.svelte';
   import {
     createProject,
     addSubtractiveTrack,
     addBusTrack,
+    addAudioTrack,
+    addAudioRegion,
+    getAudioRegions,
     addInsert,
     addContainerSubInsert,
     setContainerBranchGain,
@@ -18,6 +22,7 @@
     addAutomationPoint,
     removeAutomationPoint,
     listAutomationLanes,
+    setAssetMetadata,
     getTrackPluginId,
     getArmedTrackIdx,
     getPianoRollClipForTrack,
@@ -56,6 +61,49 @@
     if (!project) return null;
     return getTrackPluginId(project, selectedTrackIdx);
   });
+  let selectedTrackKind = $derived.by((): string | null => {
+    if (!project) return null;
+    if (selectedTrackIdx < 0 || selectedTrackIdx >= project.tracks.length) return null;
+    const id = project.tracks.get(selectedTrackIdx);
+    const t = project.trackById.get(id);
+    return (t?.get('kind') as string | undefined) ?? null;
+  });
+
+  /// Phase-5 M3: import an audio asset into the addressed Audio track
+  /// at tick 0 (full sample length). Hash to OPFS, decode, drop a
+  /// region on the track. Engine-bridge picks up the new region via
+  /// trackById.observeDeep, registers the asset, posts the snapshot.
+  async function importAssetIntoTrack(
+    trackIdx: number,
+    bytes: Uint8Array,
+    filename: string,
+  ): Promise<{ hash: string }> {
+    if (!project) throw new Error('project not ready');
+    const hash = await assetStore.putBytes(bytes);
+    const ctx = await audio.audioContext();
+    const decoded = await assetStore.decode(hash, ctx);
+    setAssetMetadata(project, hash, {
+      channels: decoded.channels,
+      sampleRate: decoded.sampleRate,
+      frames: decoded.frames,
+      sourceFilename: filename,
+    });
+    // Convert frames → ticks at the project's current BPM.
+    const bpm = getBpm(project);
+    const ticksPerSec = (bpm * PPQ) / 60;
+    const seconds = decoded.frames / decoded.sampleRate;
+    const lengthTicks = Math.max(1, Math.round(seconds * ticksPerSec));
+    addAudioRegion(project, trackIdx, {
+      assetHash: hash,
+      startTick: 0,
+      lengthTicks,
+      startSample: 0,
+      lengthSamples: decoded.frames,
+      assetOffsetSamples: 0,
+      gain: 1.0,
+    });
+    return { hash };
+  }
 
   let midi: MidiInputController | null = null;
   let midiStatus = $state<'idle' | 'requesting' | 'granted' | 'denied' | 'unsupported'>('idle');
@@ -316,6 +364,16 @@
           registerAssetPcm: (assetId: number, pcm: Float32Array) =>
             audio.postRegisterAsset(assetId, pcm),
           debugAssetCount: () => audio.debugRead('assetCount'),
+          // Phase-5 M3: import an asset into an Audio track.
+          importAssetIntoTrack: (
+            trackIdx: number,
+            bytes: Uint8Array,
+            filename: string,
+          ) => importAssetIntoTrack(trackIdx, bytes, filename),
+          getAudioRegions: (trackIdx: number) => {
+            if (!project) return [];
+            return getAudioRegions(project, trackIdx);
+          },
           // Phase-4 M5 Container backdoor. UI for branch editing is
           // deferred to a Phase-9 polish pass.
           addContainerInsert: (trackIdx: number) => {
@@ -397,6 +455,16 @@
       >+ Bus</button>
 
       <button
+        class="add-synth"
+        data-testid="add-audio-track"
+        onclick={() => {
+          if (!project) return;
+          addAudioTrack(project);
+          selectedTrackIdx = project.tracks.length - 1;
+        }}
+      >+ Audio</button>
+
+      <button
         class="record"
         class:recording
         data-testid="record"
@@ -461,7 +529,13 @@
         selectedIdx={selectedTrackIdx}
         onSelect={(i) => (selectedTrackIdx = i)}
       />
-      {#if selectedPluginId === 'builtin:subtractive'}
+      {#if selectedTrackKind === 'Audio'}
+        <div class="track-view">
+          <AudioTrackView {project} trackIdx={selectedTrackIdx} />
+          <InsertSlots {project} trackIdx={selectedTrackIdx} />
+          <SendList {project} trackIdx={selectedTrackIdx} />
+        </div>
+      {:else if selectedPluginId === 'builtin:subtractive'}
         <div class="synth-stack">
           <PianoRoll {project} trackIdx={selectedTrackIdx} />
           <PluginPanel

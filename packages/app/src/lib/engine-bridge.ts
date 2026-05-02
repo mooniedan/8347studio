@@ -19,6 +19,8 @@ import {
   type Project,
   type Waveform,
 } from './project';
+import * as assetStore from './asset-store';
+import * as audio from './audio';
 
 // ---- SAB ring layout (mirrors crates/audio-engine/src/sab_ring.rs) -----
 
@@ -405,6 +407,54 @@ function sendBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
   return concat(parts);
 }
 
+// Hash → asset_id map. Phase-5 M3 — assigned monotonically per
+// session; Phase-9 polish can persist the mapping (and a
+// hash-stable id assignment) for project files.
+const hashToAssetId = new Map<string, number>();
+let nextAssetId = 1; // 0 reserved for "unset"
+
+function idForHash(hash: string): number {
+  let id = hashToAssetId.get(hash);
+  if (id == null) {
+    id = nextAssetId++;
+    hashToAssetId.set(hash, id);
+  }
+  return id;
+}
+
+const registeredAssetIds = new Set<number>();
+
+/// Decode + ship PCM for any asset hash referenced by a track's
+/// audio regions but not yet uploaded to the engine cache. Returns
+/// once every region's asset is live.
+export async function registerMissingAssets(project: Project): Promise<void> {
+  const seen = new Set<string>();
+  for (const trackId of project.tracks.toArray()) {
+    const track = project.trackById.get(trackId);
+    const arr = track?.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined;
+    if (!arr) continue;
+    arr.forEach((r) => {
+      const hash = r.get('assetHash') as string | undefined;
+      if (hash) seen.add(hash);
+    });
+  }
+  if (seen.size === 0) return;
+  const ctx = await audio.audioContext();
+  for (const hash of seen) {
+    const id = idForHash(hash);
+    if (registeredAssetIds.has(id)) continue;
+    try {
+      const decoded = await assetStore.decode(hash, ctx);
+      await audio.postRegisterAsset(id, decoded.pcm);
+      registeredAssetIds.add(id);
+    } catch (err) {
+      // Asset not in OPFS or decode failed; the engine will
+      // silently skip the region. Phase-9 polish surfaces this.
+      console.warn('asset register failed', hash, err);
+    }
+  }
+}
+
 /// Encode the track's audio regions. Phase-5 M1 wire format:
 ///   u32 varint count, then for each region:
 ///     u32 varint asset_id
@@ -417,16 +467,34 @@ function sendBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
 function audioRegionBytesForTrack(track: Y.Map<unknown>): Uint8Array {
   const arr = track.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined;
   if (!arr || arr.length === 0) return u32VarintToBytes(0);
-  const parts: Uint8Array[] = [u32VarintToBytes(arr.length)];
+  // Skip regions whose asset hash hasn't been registered yet — the
+  // bridge schedules registration on the next rebuild.
+  const valid: { assetId: number; startSample: number; lengthSamples: number; offset: number; gain: number; fadeIn: number; fadeOut: number }[] = [];
   arr.forEach((r) => {
-    parts.push(u32VarintToBytes((r.get('assetId') as number | undefined) ?? 0));
-    parts.push(u64VarintToBytes((r.get('startSample') as number | undefined) ?? 0));
-    parts.push(u64VarintToBytes((r.get('lengthSamples') as number | undefined) ?? 0));
-    parts.push(u64VarintToBytes((r.get('assetOffsetSamples') as number | undefined) ?? 0));
-    parts.push(f32ToBytes((r.get('gain') as number | undefined) ?? 1.0));
-    parts.push(u32VarintToBytes((r.get('fadeInSamples') as number | undefined) ?? 0));
-    parts.push(u32VarintToBytes((r.get('fadeOutSamples') as number | undefined) ?? 0));
+    const hash = r.get('assetHash') as string | undefined;
+    if (!hash) return;
+    const assetId = hashToAssetId.get(hash);
+    if (assetId == null || !registeredAssetIds.has(assetId)) return;
+    valid.push({
+      assetId,
+      startSample: (r.get('startSample') as number | undefined) ?? 0,
+      lengthSamples: (r.get('lengthSamples') as number | undefined) ?? 0,
+      offset: (r.get('assetOffsetSamples') as number | undefined) ?? 0,
+      gain: (r.get('gain') as number | undefined) ?? 1.0,
+      fadeIn: (r.get('fadeInSamples') as number | undefined) ?? 0,
+      fadeOut: (r.get('fadeOutSamples') as number | undefined) ?? 0,
+    });
   });
+  const parts: Uint8Array[] = [u32VarintToBytes(valid.length)];
+  for (const r of valid) {
+    parts.push(u32VarintToBytes(r.assetId));
+    parts.push(u64VarintToBytes(r.startSample));
+    parts.push(u64VarintToBytes(r.lengthSamples));
+    parts.push(u64VarintToBytes(r.offset));
+    parts.push(f32ToBytes(r.gain));
+    parts.push(u32VarintToBytes(r.fadeIn));
+    parts.push(u32VarintToBytes(r.fadeOut));
+  }
   return concat(parts);
 }
 
@@ -581,7 +649,17 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   const writer = new RingWriter(host.ring);
 
   const rebuild = () => {
-    host.postRebuild(buildSnapshot(project));
+    // Phase-5 M3: register any newly-referenced assets BEFORE posting
+    // the snapshot so the engine never sees a region without its PCM.
+    // Fire-and-forget — observer callbacks stay synchronous.
+    void (async () => {
+      try {
+        await registerMissingAssets(project);
+      } catch (err) {
+        console.warn('registerMissingAssets failed', err);
+      }
+      host.postRebuild(buildSnapshot(project));
+    })();
   };
 
   // Auto-rebuild when track structure changes (track count, instrument
@@ -597,7 +675,8 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
         path.endsWith('instrumentSlot') ||
         path.endsWith('clips') ||
         path.includes('inserts') ||
-        path.includes('sends')
+        path.includes('sends') ||
+        path.includes('audioRegions')
       ) {
         needs = true;
         break;

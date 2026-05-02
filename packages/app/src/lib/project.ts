@@ -618,6 +618,146 @@ export function listMidiBindings(p: Project): { cc: number; binding: MidiBinding
   return out;
 }
 
+/// Add an Audio track. Phase-5 M3. Audio tracks have no instrument
+/// and host AudioRegion clips referencing OPFS-stored assets by hash.
+export function addAudioTrack(p: Project, name?: string): string {
+  let trackId = '';
+  p.doc.transact(() => {
+    const id = makeId('track');
+    const track = new Y.Map<unknown>();
+    const idx = p.tracks.length;
+    track.set('kind', 'Audio');
+    track.set('name', name ?? `Audio ${idx + 1}`);
+    track.set('color', TRACK_PALETTE[idx % TRACK_PALETTE.length]);
+    track.set('mute', false);
+    track.set('solo', false);
+    track.set('gain', 1.0);
+    track.set('pan', 0);
+    track.set('clips', new Y.Array<string>());
+    track.set('inserts', new Y.Array());
+    track.set('sends', new Y.Array());
+    track.set('audioRegions', new Y.Array<Y.Map<unknown>>());
+    p.trackById.set(id, track);
+    p.tracks.push([id]);
+    trackId = id;
+  });
+  return trackId;
+}
+
+export interface AudioRegionView {
+  assetHash: string;
+  startTick: number;
+  lengthTicks: number;
+  startSample: number;
+  lengthSamples: number;
+  assetOffsetSamples: number;
+  gain: number;
+  fadeInSamples: number;
+  fadeOutSamples: number;
+}
+
+export interface AudioRegionInput {
+  assetHash: string;
+  startTick: number;
+  lengthTicks: number;
+  startSample: number;
+  lengthSamples: number;
+  assetOffsetSamples?: number;
+  gain?: number;
+  fadeInSamples?: number;
+  fadeOutSamples?: number;
+}
+
+function trackAudioRegionsArr(p: Project, trackIdx: number): Y.Array<Y.Map<unknown>> | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const id = p.tracks.get(trackIdx);
+  const track = p.trackById.get(id);
+  if (!track || track.get('kind') !== 'Audio') return null;
+  return (track.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined) ?? null;
+}
+
+export function addAudioRegion(
+  p: Project,
+  trackIdx: number,
+  region: AudioRegionInput,
+): void {
+  const arr = trackAudioRegionsArr(p, trackIdx);
+  if (!arr) return;
+  p.doc.transact(() => {
+    const r = new Y.Map<unknown>();
+    r.set('assetHash', region.assetHash);
+    r.set('startTick', Math.max(0, Math.floor(region.startTick)));
+    r.set('lengthTicks', Math.max(0, Math.floor(region.lengthTicks)));
+    r.set('startSample', Math.max(0, Math.floor(region.startSample)));
+    r.set('lengthSamples', Math.max(0, Math.floor(region.lengthSamples)));
+    r.set('assetOffsetSamples', Math.max(0, Math.floor(region.assetOffsetSamples ?? 0)));
+    r.set('gain', region.gain ?? 1.0);
+    r.set('fadeInSamples', Math.max(0, Math.floor(region.fadeInSamples ?? 0)));
+    r.set('fadeOutSamples', Math.max(0, Math.floor(region.fadeOutSamples ?? 0)));
+    arr.push([r]);
+  });
+}
+
+export function getAudioRegions(p: Project, trackIdx: number): AudioRegionView[] {
+  const arr = trackAudioRegionsArr(p, trackIdx);
+  if (!arr) return [];
+  const out: AudioRegionView[] = [];
+  arr.forEach((r) => {
+    const assetHash = (r.get('assetHash') as string | undefined) ?? '';
+    if (!assetHash) return;
+    out.push({
+      assetHash,
+      startTick: (r.get('startTick') as number | undefined) ?? 0,
+      lengthTicks: (r.get('lengthTicks') as number | undefined) ?? 0,
+      startSample: (r.get('startSample') as number | undefined) ?? 0,
+      lengthSamples: (r.get('lengthSamples') as number | undefined) ?? 0,
+      assetOffsetSamples: (r.get('assetOffsetSamples') as number | undefined) ?? 0,
+      gain: (r.get('gain') as number | undefined) ?? 1.0,
+      fadeInSamples: (r.get('fadeInSamples') as number | undefined) ?? 0,
+      fadeOutSamples: (r.get('fadeOutSamples') as number | undefined) ?? 0,
+    });
+  });
+  return out;
+}
+
+export interface AssetMetadataView {
+  channels: number;
+  sampleRate: number;
+  frames: number;
+  sourceFilename?: string;
+  format?: string;
+}
+
+export function setAssetMetadata(p: Project, hash: string, meta: AssetMetadataView): void {
+  p.doc.transact(() => {
+    const m = new Y.Map<unknown>();
+    m.set('channels', meta.channels);
+    m.set('sampleRate', meta.sampleRate);
+    m.set('frames', meta.frames);
+    if (meta.sourceFilename != null) m.set('sourceFilename', meta.sourceFilename);
+    if (meta.format != null) m.set('format', meta.format);
+    p.assets.set(hash, m);
+  });
+}
+
+export function getAssetMetadata(p: Project, hash: string): AssetMetadataView | null {
+  const m = p.assets.get(hash) as Y.Map<unknown> | undefined;
+  if (!m) return null;
+  const channels = m.get('channels') as number | undefined;
+  const sampleRate = m.get('sampleRate') as number | undefined;
+  const frames = m.get('frames') as number | undefined;
+  if (typeof channels !== 'number' || typeof sampleRate !== 'number' || typeof frames !== 'number') {
+    return null;
+  }
+  return {
+    channels,
+    sampleRate,
+    frames,
+    sourceFilename: m.get('sourceFilename') as string | undefined,
+    format: m.get('format') as string | undefined,
+  };
+}
+
 /// Add a Bus track. Buses host inserts (e.g. a reverb plugin in M3+)
 /// and aggregate signal from any track that sends to them. Phase-4 M2.
 export function addBusTrack(p: Project, name?: string): string {
