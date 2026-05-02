@@ -1,12 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
+    activeProjects,
+    archiveProject,
+    archivedProjects,
     createProjectInfo,
-    deleteProjectStorage,
+    emptyTrash,
     loadRegistry,
-    removeProjectFromRegistry,
+    purgeProject,
     renameProjectInRegistry,
+    restoreProject,
     setLastOpenedProject,
+    trashSizeBytes,
+    TRASH_WARN_BYTES,
     type ProjectInfo,
     type Registry,
   } from './project-registry';
@@ -20,6 +26,7 @@
   } = $props();
 
   let open = $state(false);
+  let trashOpen = $state(false);
   let registry = $state<Registry>({ projects: [], lastOpenedId: null });
   let editingId = $state<string | null>(null);
   let editingName = $state('');
@@ -30,15 +37,19 @@
 
   onMount(() => {
     refresh();
-    // Cross-window sync via the storage event.
     const onStorage = () => refresh();
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   });
 
-  const sorted = $derived.by(() =>
-    [...registry.projects].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
+  const active = $derived.by(() =>
+    [...activeProjects(registry)].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
   );
+  const archived = $derived.by(() =>
+    [...archivedProjects(registry)].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+  );
+  const trashBytes = $derived(trashSizeBytes(registry));
+  const trashOverLimit = $derived(trashBytes > TRASH_WARN_BYTES);
 
   const activeProject = $derived(
     registry.projects.find((p) => p.id === activeProjectId) ?? null,
@@ -51,7 +62,7 @@
 
   function handleNew() {
     const name = window.prompt('Project name:', 'Untitled');
-    if (name == null) return; // cancel
+    if (name == null) return;
     const info = createProjectInfo(name);
     refresh();
     onSwitch(info.id);
@@ -73,7 +84,6 @@
     editingId = p.id;
     editingName = p.name;
   }
-
   function handleConfirmRename() {
     if (editingId == null) return;
     renameProjectInRegistry(editingId, editingName);
@@ -81,28 +91,58 @@
     editingName = '';
     refresh();
   }
-
   function handleCancelRename() {
     editingId = null;
     editingName = '';
   }
 
-  async function handleDelete(p: ProjectInfo) {
-    if (registry.projects.length <= 1) {
-      window.alert('Cannot delete the last remaining project.');
+  async function handleArchive(p: ProjectInfo) {
+    if (active.length <= 1) {
+      window.alert('Cannot archive the last remaining project.');
       return;
     }
-    const ok = window.confirm(`Delete "${p.name}"? This wipes its IndexedDB store.`);
+    const ok = window.confirm(
+      `Move "${p.name}" to trash? You can restore it from the trash list.`,
+    );
     if (!ok) return;
-    const docName = removeProjectFromRegistry(p.id);
+    const wasActive = p.id === activeProjectId;
+    await archiveProject(p.id);
     refresh();
-    if (docName) {
-      await deleteProjectStorage(docName);
-    }
-    if (p.id === activeProjectId) {
-      const next = registry.lastOpenedId ?? registry.projects[0]?.id;
+    open = false;
+    if (wasActive) {
+      const next = registry.lastOpenedId ?? active[0]?.id;
       if (next) onSwitch(next);
     }
+  }
+
+  function handleRestore(p: ProjectInfo) {
+    restoreProject(p.id);
+    refresh();
+  }
+
+  async function handlePermanentDelete(p: ProjectInfo) {
+    const ok = window.confirm(
+      `Permanently delete "${p.name}"? This wipes its IndexedDB store and cannot be undone.`,
+    );
+    if (!ok) return;
+    await purgeProject(p.id);
+    refresh();
+  }
+
+  async function handleEmptyTrash() {
+    if (archived.length === 0) return;
+    const ok = window.confirm(
+      `Permanently delete ${archived.length} archived project${archived.length === 1 ? '' : 's'}? This cannot be undone.`,
+    );
+    if (!ok) return;
+    await emptyTrash();
+    refresh();
+  }
+
+  function fmtBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 </script>
 
@@ -114,7 +154,7 @@
     <div class="menu" data-testid="projects-menu-list">
       <button class="new" data-testid="projects-new" onclick={handleNew}>+ New project…</button>
       <ol>
-        {#each sorted as p (p.id)}
+        {#each active as p (p.id)}
           <li class="row" class:active={p.id === activeProjectId}>
             {#if editingId === p.id}
               <input
@@ -142,15 +182,64 @@
               >✎</button>
               <button
                 class="del"
-                data-testid={`projects-delete-${p.id}`}
-                onclick={() => handleDelete(p)}
-                aria-label={`Delete ${p.name}`}
-                title="Delete"
+                data-testid={`projects-archive-${p.id}`}
+                onclick={() => void handleArchive(p)}
+                aria-label={`Move ${p.name} to trash`}
+                title="Move to trash"
               >×</button>
             {/if}
           </li>
         {/each}
       </ol>
+
+      <div class="trash" data-testid="projects-trash-section">
+        <button
+          class="trash-toggle"
+          data-testid="projects-trash-toggle"
+          onclick={() => (trashOpen = !trashOpen)}
+          aria-expanded={trashOpen}
+        >
+          {trashOpen ? '▾' : '▸'} Trash ({archived.length}{archived.length > 0
+            ? `, ${fmtBytes(trashBytes)}`
+            : ''})
+        </button>
+        {#if trashOpen}
+          {#if trashOverLimit}
+            <div class="warn" data-testid="projects-trash-warn">
+              Trash exceeds {fmtBytes(TRASH_WARN_BYTES)}. Empty trash to reclaim space.
+            </div>
+          {/if}
+          {#if archived.length === 0}
+            <div class="empty">Trash is empty.</div>
+          {:else}
+            <ol class="trash-list">
+              {#each archived as p (p.id)}
+                <li class="row trashed" data-testid={`projects-trash-row-${p.id}`}>
+                  <span class="open trashed-name">{p.name}</span>
+                  <span class="size">{fmtBytes(p.archivedSize ?? 0)}</span>
+                  <button
+                    class="rn"
+                    data-testid={`projects-restore-${p.id}`}
+                    onclick={() => handleRestore(p)}
+                    title="Restore"
+                  >↺</button>
+                  <button
+                    class="del"
+                    data-testid={`projects-purge-${p.id}`}
+                    onclick={() => void handlePermanentDelete(p)}
+                    title="Delete permanently"
+                  >🗑</button>
+                </li>
+              {/each}
+            </ol>
+            <button
+              class="empty-btn"
+              data-testid="projects-empty-trash"
+              onclick={() => void handleEmptyTrash()}
+            >Empty trash</button>
+          {/if}
+        {/if}
+      </div>
     </div>
   {/if}
 </div>
@@ -182,7 +271,7 @@
     color: #ccc;
     font-family: system-ui, sans-serif;
     font-size: 11px;
-    min-width: 240px;
+    min-width: 280px;
     padding: 4px;
     z-index: 10;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -248,5 +337,58 @@
     border: 1px solid #2a2a2a;
     padding: 2px 4px;
     font: inherit;
+  }
+  .trash {
+    margin-top: 6px;
+    border-top: 1px solid #2a2a2a;
+    padding-top: 6px;
+  }
+  .trash-toggle {
+    background: transparent;
+    color: #aaa;
+    border: 1px solid #2a2a2a;
+    padding: 3px 6px;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+  }
+  .trash-toggle:hover {
+    background: #1f1f1f;
+  }
+  .trash-list {
+    margin-top: 4px;
+  }
+  .trashed-name {
+    color: #999;
+    font-style: italic;
+  }
+  .size {
+    color: #666;
+    font: 10px ui-monospace, monospace;
+    margin-right: 4px;
+  }
+  .warn {
+    background: #2a1f0a;
+    color: #ffb84a;
+    border: 1px solid #5a3f10;
+    padding: 4px 6px;
+    margin-top: 4px;
+    font-size: 10px;
+  }
+  .empty {
+    color: #666;
+    padding: 4px;
+    font-style: italic;
+    font-size: 10px;
+  }
+  .empty-btn {
+    margin-top: 4px;
+    background: #2a0e0e;
+    color: #ff8585;
+    border: 1px solid #5a1010;
+    padding: 3px 8px;
+    font: inherit;
+    cursor: pointer;
   }
 </style>
