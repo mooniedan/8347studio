@@ -5,6 +5,7 @@
   import Mixer from './lib/Mixer.svelte';
   import PluginPanel from './lib/PluginPanel.svelte';
   import PianoRoll from './lib/PianoRoll.svelte';
+  import InsertSlots from './lib/InsertSlots.svelte';
   import {
     createProject,
     addSubtractiveTrack,
@@ -367,9 +368,13 @@
             onBindParam={bindPendingCC}
             onUnbindCC={unbindCC}
           />
+          <InsertSlots {project} trackIdx={selectedTrackIdx} />
         </div>
       {:else}
-        <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
+        <div class="track-view">
+          <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
+          <InsertSlots {project} trackIdx={selectedTrackIdx} />
+        </div>
       {/if}
     </div>
     <Mixer {project} />
@@ -397,7 +402,8 @@
     gap: 16px;
     padding: 16px;
   }
-  .synth-stack {
+  .synth-stack,
+  .track-view {
     display: flex;
     flex-direction: column;
     gap: 12px;

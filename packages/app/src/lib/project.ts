@@ -475,6 +475,91 @@ export function listMidiBindings(p: Project): { cc: number; binding: MidiBinding
   return out;
 }
 
+/// Insert FX chain helpers — Phase-4 M1. Each insert is a Y.Map with
+/// pluginId, params (Y.Map<paramId-string, number>), and bypass.
+export type InsertPluginId = 'builtin:gain';
+
+export interface InsertView {
+  kind: InsertPluginId;
+  params: Record<number, number>;
+  bypass: boolean;
+}
+
+function trackInsertArr(p: Project, trackIdx: number): Y.Array<Y.Map<unknown>> | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const id = p.tracks.get(trackIdx);
+  const track = p.trackById.get(id);
+  if (!track) return null;
+  return (track.get('inserts') as Y.Array<Y.Map<unknown>> | undefined) ?? null;
+}
+
+export function getTrackInserts(p: Project, trackIdx: number): InsertView[] {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr) return [];
+  const out: InsertView[] = [];
+  arr.forEach((slot) => {
+    const pid = slot.get('pluginId') as string;
+    if (pid !== 'builtin:gain') return;
+    const params: Record<number, number> = {};
+    const ymap = slot.get('params') as Y.Map<unknown> | undefined;
+    ymap?.forEach((v, k) => {
+      const id = parseInt(k, 10);
+      if (!Number.isNaN(id) && typeof v === 'number') params[id] = v;
+    });
+    out.push({ kind: 'builtin:gain', params, bypass: Boolean(slot.get('bypass')) });
+  });
+  return out;
+}
+
+export function addInsert(p: Project, trackIdx: number, kind: InsertPluginId): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr) return;
+  p.doc.transact(() => {
+    const slot = new Y.Map<unknown>();
+    slot.set('pluginId', kind);
+    slot.set('bypass', false);
+    const params = new Y.Map<unknown>();
+    if (kind === 'builtin:gain') params.set('0', 1.0);
+    slot.set('params', params);
+    arr.push([slot]);
+  });
+}
+
+export function removeInsert(p: Project, trackIdx: number, slotIdx: number): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr || slotIdx < 0 || slotIdx >= arr.length) return;
+  p.doc.transact(() => arr.delete(slotIdx, 1));
+}
+
+export function setInsertBypass(
+  p: Project,
+  trackIdx: number,
+  slotIdx: number,
+  bypass: boolean,
+): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr || slotIdx < 0 || slotIdx >= arr.length) return;
+  arr.get(slotIdx)?.set('bypass', bypass);
+}
+
+export function setInsertParam(
+  p: Project,
+  trackIdx: number,
+  slotIdx: number,
+  paramId: number,
+  value: number,
+): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr || slotIdx < 0 || slotIdx >= arr.length) return;
+  const slot = arr.get(slotIdx);
+  let params = slot?.get('params') as Y.Map<unknown> | undefined;
+  if (!params) {
+    params = new Y.Map<unknown>();
+    slot?.set('params', params);
+  }
+  params.set(String(paramId), value);
+}
+
 export function getTrackPluginId(p: Project, trackIdx: number): string | null {
   if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
   const id = p.tracks.get(trackIdx);

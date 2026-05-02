@@ -31,6 +31,23 @@ pub struct TrackSnapshot {
     /// Notes for the track's first PianoRoll clip. Empty when the
     /// track has no piano-roll clip. Phase-2 M4 introduced.
     pub piano_roll_notes: Vec<NoteSnapshot>,
+    /// Insert FX chain. Phase-4 M1 introduced. Empty = dry signal.
+    pub inserts: Vec<InsertSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InsertSnapshot {
+    pub kind: InsertKind,
+    pub params: Vec<(u32, f32)>,
+    pub bypass: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InsertKind {
+    /// First-party Gain — clean amplitude scaler. Phase-4 M1 fixture.
+    Gain,
+    // Phase-4 M3 will append EQ, Compressor, Reverb, Delay.
+    // Phase-4 M5 appends Container.
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

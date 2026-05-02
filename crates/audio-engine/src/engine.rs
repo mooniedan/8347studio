@@ -2,12 +2,13 @@ use crate::clip_scheduler::{ClipScheduler, ScheduledNote};
 use crate::event::Event;
 use crate::oscillator::Waveform;
 use crate::plugin::{Plugin, Silence};
+use crate::plugins::gain::Gain;
 use crate::plugins::subtractive::Subtractive;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
-use crate::snapshot::{InstrumentSnapshot, ProjectSnapshot};
+use crate::snapshot::{InsertKind, InstrumentSnapshot, ProjectSnapshot};
 use crate::tempo_map::TempoMap;
-use crate::track::TrackEngine;
+use crate::track::{InsertSlot, TrackEngine};
 
 pub struct Engine {
     pub tracks: Vec<TrackEngine>,
@@ -106,6 +107,23 @@ impl Engine {
                         seq.set_step_mask(step_idx as u32, *mask);
                     }
                 }
+            }
+            // Insert chain. Phase-4 M1 always rebuilds — the chain is
+            // typically tiny and rebuilding avoids tracking per-slot
+            // identity. Reuse becomes worth it once Reverb/etc. land
+            // (M3) and rebuilding throws away expensive state.
+            self.tracks[i].inserts.clear();
+            for ins in ts.inserts.iter() {
+                let mut plugin: Box<dyn Plugin> = match ins.kind {
+                    InsertKind::Gain => Box::new(Gain::new()),
+                };
+                for &(id, value) in &ins.params {
+                    plugin.set_param(id, value);
+                }
+                self.tracks[i].inserts.push(InsertSlot {
+                    plugin,
+                    bypass: ins.bypass,
+                });
             }
         }
         if snap.tracks.len() < self.tracks.len() {
@@ -518,6 +536,7 @@ mod tests {
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 1 },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -530,6 +549,7 @@ mod tests {
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
                 },
             ],
         };
@@ -558,6 +578,7 @@ mod tests {
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -722,6 +743,7 @@ mod tests {
                     0
                 ],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -750,6 +772,7 @@ mod tests {
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 2 },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
             }],
         };
         let bytes = crate::snapshot::encode(&snap);
@@ -815,6 +838,7 @@ mod tests {
                 },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -847,6 +871,7 @@ mod tests {
                 instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -872,6 +897,101 @@ mod tests {
             .downcast_ref::<Subtractive>()
             .expect("Subtractive instrument");
         assert!((s.get_param(PID_FILTER_CUTOFF).unwrap() - 4321.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn insert_chain_attenuates_track_signal() {
+        use crate::snapshot::{InsertKind, InsertSnapshot};
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Lead".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
+                // Two Gain inserts, each at 0.5 → chain output is 0.25× input.
+                inserts: alloc::vec![
+                    InsertSnapshot {
+                        kind: InsertKind::Gain,
+                        params: alloc::vec![(0, 0.5)],
+                        bypass: false,
+                    },
+                    InsertSnapshot {
+                        kind: InsertKind::Gain,
+                        params: alloc::vec![(0, 0.5)],
+                        bypass: false,
+                    },
+                ],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        // Stub source: write 1.0 into the first insert's input via a
+        // ConstSource (which Engine.tracks already uses).
+        e.tracks[0].instrument = alloc::boxed::Box::new(ConstSource {
+            value: 1.0,
+            playing: true,
+        });
+        e.set_playing(true);
+
+        let mut l = [0.0f32; 8];
+        let mut r = [0.0f32; 8];
+        e.process_stereo(&mut l, &mut r);
+        // 1.0 * 0.5 * 0.5 = 0.25, then constant-power pan ÷√2 each side.
+        let expected = 0.25 * core::f32::consts::FRAC_1_SQRT_2;
+        assert!((l[0] - expected).abs() < 1e-5, "l[0] = {}, expected {}", l[0], expected);
+    }
+
+    #[test]
+    fn bypass_skips_insert_in_chain() {
+        use crate::snapshot::{InsertKind, InsertSnapshot};
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Lead".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![
+                    InsertSnapshot {
+                        kind: InsertKind::Gain,
+                        params: alloc::vec![(0, 0.5)],
+                        bypass: true, // first insert bypassed
+                    },
+                    InsertSnapshot {
+                        kind: InsertKind::Gain,
+                        params: alloc::vec![(0, 0.5)],
+                        bypass: false,
+                    },
+                ],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.tracks[0].instrument = alloc::boxed::Box::new(ConstSource {
+            value: 1.0,
+            playing: true,
+        });
+        e.set_playing(true);
+
+        let mut l = [0.0f32; 8];
+        let mut r = [0.0f32; 8];
+        e.process_stereo(&mut l, &mut r);
+        // Skipped first → only second 0.5 applies.
+        let expected = 0.5 * core::f32::consts::FRAC_1_SQRT_2;
+        assert!((l[0] - expected).abs() < 1e-5);
     }
 
     #[test]
@@ -927,6 +1047,7 @@ mod tests {
                     start_tick: 0,
                     length_ticks: 1920,
                 }],
+                inserts: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -959,6 +1080,7 @@ mod tests {
                 },
                 steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);

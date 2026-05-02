@@ -308,6 +308,45 @@ function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
   return concat(parts);
 }
 
+// InsertKind discriminants — must match
+// crates/audio-engine/src/snapshot.rs::InsertKind. Append-only.
+const INSERT_GAIN = 0;
+
+function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
+  const arr = track.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr || arr.length === 0) return u32VarintToBytes(0);
+  // First, collect known inserts so the count we emit matches the
+  // payloads (skipping unknown plugin ids without messing up the
+  // varint length we already wrote).
+  const known: { kind: number; entries: [number, number][]; bypass: boolean }[] = [];
+  arr.forEach((slot) => {
+    const pid = slot.get('pluginId') as string | undefined;
+    if (pid !== 'builtin:gain') return;
+    const params = slot.get('params') as Y.Map<unknown> | undefined;
+    const entries: [number, number][] = [];
+    params?.forEach((v, k) => {
+      const id = parseInt(k, 10);
+      if (!Number.isNaN(id) && typeof v === 'number') entries.push([id, v]);
+    });
+    known.push({
+      kind: INSERT_GAIN,
+      entries,
+      bypass: Boolean(slot.get('bypass')),
+    });
+  });
+  const parts: Uint8Array[] = [u32VarintToBytes(known.length)];
+  for (const k of known) {
+    parts.push(new Uint8Array([k.kind]));
+    parts.push(u32VarintToBytes(k.entries.length));
+    for (const [id, val] of k.entries) {
+      parts.push(u32VarintToBytes(id));
+      parts.push(f32ToBytes(val));
+    }
+    parts.push(new Uint8Array([k.bypass ? 1 : 0]));
+  }
+  return concat(parts);
+}
+
 function pianoRollBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
   if (track.get('kind') !== 'MIDI') {
     return u32VarintToBytes(0);
@@ -365,6 +404,7 @@ export function buildSnapshot(project: Project): Uint8Array {
         instrumentSnapshotBytes(track),
         stepBytesForTrack(project, track),
         pianoRollBytesForTrack(project, track),
+        insertBytesForTrack(track),
       ]),
     );
   }
@@ -413,7 +453,12 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
     let needs = false;
     for (const ev of events) {
       const path = ev.path.join('/');
-      if (path === '' || path.endsWith('instrumentSlot') || path.endsWith('clips')) {
+      if (
+        path === '' ||
+        path.endsWith('instrumentSlot') ||
+        path.endsWith('clips') ||
+        path.includes('inserts')
+      ) {
         needs = true;
         break;
       }
