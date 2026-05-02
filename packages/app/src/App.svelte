@@ -59,6 +59,7 @@
     type RootHandle,
     type SatelliteIntent,
   } from './lib/satellite';
+  import { createPipController, isPipSupported, type PipController } from './lib/pip';
   import { createAudioRecorder, type AudioRecorder } from './lib/audio-recorder';
   import { encodeWavMono16 } from './lib/wav';
 
@@ -254,6 +255,44 @@
 
   let rootSyncHandle: RootHandle | null = null;
 
+  // Phase-6 M3: PIP transport. Lazy-create the controller; bindings
+  // close over the live project + bridge so the polling loop in
+  // TransportPipPanel sees current state.
+  let pipController: PipController | null = null;
+  let pipSupported = $state(isPipSupported());
+  let pipPlaying = $state(false);
+
+  function ensurePipController(): PipController | null {
+    if (pipController) return pipController;
+    if (!project || !bridge) return null;
+    const p = project;
+    const b = bridge;
+    pipController = createPipController({
+      getPlaying: () => pipPlaying,
+      getBpm: () => getBpm(p),
+      getProjectName: () => (p.meta.get('name') as string | undefined) ?? 'Untitled',
+      play: () => {
+        pipPlaying = true;
+        b.setTransport(true);
+      },
+      stop: () => {
+        pipPlaying = false;
+        b.setTransport(false);
+      },
+    });
+    return pipController;
+  }
+
+  async function openPip() {
+    const c = ensurePipController();
+    if (!c) return;
+    try {
+      await c.open();
+    } catch (err) {
+      console.warn('PIP open failed', err);
+    }
+  }
+
   function handleSatelliteIntent(intent: SatelliteIntent): void {
     if (!project || !bridge) return;
     switch (intent.kind) {
@@ -282,6 +321,7 @@
   }
 
   onDestroy(() => {
+    pipController?.destroy();
     rootSyncHandle?.destroy();
     midi?.destroy();
     bridge?.destroy();
@@ -483,6 +523,23 @@
               destroy: () => sat.destroy(),
             };
           },
+          // Phase-6 M3: feature-detect + bindings smoke test for the
+          // PIP transport. The real "open a PIP window" path needs a
+          // user gesture in browsers that support Document PIP at
+          // all; tests just verify the bindings produced are wired.
+          isPipSupported: () => isPipSupported(),
+          pipPlay: () => {
+            const c = ensurePipController();
+            void c;
+            if (!bridge) return;
+            pipPlaying = true;
+            bridge.setTransport(true);
+          },
+          pipStop: () => {
+            if (!bridge) return;
+            pipPlaying = false;
+            bridge.setTransport(false);
+          },
           // Phase-4 M5 Container backdoor. UI for branch editing is
           // deferred to a Phase-9 polish pass.
           addContainerInsert: (trackIdx: number) => {
@@ -572,6 +629,18 @@
           selectedTrackIdx = project.tracks.length - 1;
         }}
       >+ Audio</button>
+
+      <button
+        class="add-synth"
+        data-testid="open-pip"
+        disabled={!pipSupported}
+        onclick={openPip}
+        title={pipSupported
+          ? 'Open transport in a Picture-in-Picture window'
+          : 'Document PIP not supported in this browser'}
+      >
+        ⌐ Transport
+      </button>
 
       <button
         class="record"
@@ -704,6 +773,8 @@
   }
   .toolbar {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     padding: 8px 16px;
     border-bottom: 1px solid #1f1f1f;
@@ -775,7 +846,6 @@
     gap: 6px;
     color: #aaa;
     font: 11px system-ui, sans-serif;
-    margin-left: auto;
   }
   .midi-chip select {
     background: #222;
