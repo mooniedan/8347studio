@@ -18,6 +18,8 @@ export const DEFAULT_PROJECT_ID = 'default';
 /// Warn the user when archived projects exceed this many bytes.
 export const TRASH_WARN_BYTES = 100 * 1024 * 1024; // 100 MB
 
+export type SeedMode = 'blank' | 'demo';
+
 export interface ProjectInfo {
   id: string;
   docName: string;
@@ -31,6 +33,10 @@ export interface ProjectInfo {
   /// total + warning banner — the doc isn't being edited any more
   /// so the value stays representative.
   archivedSize?: number | null;
+  /// One-shot hint for the seed used when the Y.Doc is first created.
+  /// Consumed by createProject() and then cleared (the doc has been
+  /// seeded; the flag would just confuse later boots).
+  seed?: SeedMode;
 }
 
 export interface Registry {
@@ -93,7 +99,7 @@ function makeId(): string {
   return `p_${rnd}_${stamp}`;
 }
 
-export function createProjectInfo(name: string): ProjectInfo {
+export function createProjectInfo(name: string, opts: { seed?: SeedMode } = {}): ProjectInfo {
   const id = makeId();
   const now = Date.now();
   const info: ProjectInfo = {
@@ -103,11 +109,23 @@ export function createProjectInfo(name: string): ProjectInfo {
     createdAt: now,
     lastOpenedAt: now,
   };
+  if (opts.seed) info.seed = opts.seed;
   const r = loadRegistry();
   r.projects.push(info);
   r.lastOpenedId = id;
   saveRegistry(r);
   return info;
+}
+
+/// Clear the one-shot `seed` hint after the doc has been created.
+/// Called by the boot path so subsequent reloads of the same project
+/// don't re-trigger seeding.
+export function clearSeedHint(id: string): void {
+  const r = loadRegistry();
+  const p = r.projects.find((x) => x.id === id);
+  if (!p || p.seed == null) return;
+  delete p.seed;
+  saveRegistry(r);
 }
 
 export function renameProjectInRegistry(id: string, name: string): void {

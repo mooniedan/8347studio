@@ -65,7 +65,7 @@ test.describe('phase-4 / M4 automation lanes', () => {
 
     // Start playback. Engine ticks from 0; the lane's first block
     // pushes cutoff toward 100 Hz.
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
 
     // Poll cutoff: it should pass through the high range as the bar
     // progresses (ticks 0..3840 → cutoff 100..8000). Wait for the

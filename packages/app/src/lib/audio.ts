@@ -93,7 +93,8 @@ export async function debugRead(
     | 'currentTick'
     | 'bpm'
     | 'trackPeak'
-    | 'assetCount',
+    | 'assetCount'
+    | 'loopEnd',
   track = 0,
 ): Promise<number> {
   await ensureReady();

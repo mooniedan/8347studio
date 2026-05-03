@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { untrack } from 'svelte';
   import * as audio from './audio';
   import {
     LOW_MIDI,
@@ -25,7 +25,10 @@
   const name = (m: number) => `${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
 
   let notes = $state<PianoRollNote[]>(untrack(() => snapshotNotes()));
-  let playing = $state(false);
+  // Column index (0..STEPS_PER_CLIP-1) currently under the playhead,
+  // computed from the engine's current_tick mod the visible bar.
+  // -1 = transport stopped / not playing.
+  let playheadCol = $state(-1);
 
   function snapshotNotes(): PianoRollNote[] {
     const clip = getPianoRollClipForTrack(project, trackIdx);
@@ -70,23 +73,30 @@
     };
   });
 
-  async function togglePlay() {
-    if (playing) {
-      await audio.stop();
-      playing = false;
-    } else {
-      await audio.play();
-      playing = true;
-    }
-  }
+  // Drive the column-highlight playhead from engine current_tick.
+  // The grid shows STEPS_PER_CLIP columns of one bar; map any tick
+  // to that bar via `mod (STEPS_PER_CLIP × STEP_TICKS)`. The poll
+  // is animation-frame paced and only runs while playing.
+  $effect(() => {
+    const BAR_TICKS = STEPS_PER_CLIP * STEP_TICKS;
+    let cancelled = false;
+    let raf = 0;
+    const tick = async () => {
+      if (cancelled) return;
+      const t = await audio.debugRead('currentTick');
+      // current_tick freezes at 0 when stopped; treat that as no playhead.
+      playheadCol = t > 0 ? Math.floor((t % BAR_TICKS) / STEP_TICKS) : -1;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  });
 </script>
 
 <div class="wrap">
-  <div class="controls">
-    <button class="play" onclick={togglePlay} data-testid="piano-play">
-      {playing ? 'stop' : 'play'}
-    </button>
-  </div>
   <div class="roll">
     <div class="keys">
       {#each rows as midi}
@@ -105,6 +115,7 @@
             class:black-row={isBlack(midi)}
             class:beat={c % 4 === 0}
             class:on={Boolean(noteAt(c, midi))}
+            class:playhead={c === playheadCol}
             style="grid-row: {r + 1}; grid-column: {c + 1};"
             data-testid={`piano-cell-${midi}-${c}`}
             onclick={() => toggleCell(c, midi)}
@@ -120,14 +131,6 @@
   .wrap {
     font-family: system-ui, sans-serif;
     color: #ddd;
-  }
-  .controls {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 8px;
-  }
-  button.play {
-    padding: 4px 12px;
   }
   .roll {
     display: grid;
@@ -177,5 +180,11 @@
   }
   .cell.on {
     background: #ff8c00;
+  }
+  .cell.playhead {
+    box-shadow: inset 0 0 0 2px #ffd84a;
+  }
+  .cell.on.playhead {
+    background: #ffaa33;
   }
 </style>

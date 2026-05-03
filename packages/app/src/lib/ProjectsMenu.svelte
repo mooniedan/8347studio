@@ -69,6 +69,13 @@
     open = false;
   }
 
+  function handleNewDemo() {
+    const info = createProjectInfo('Demo Song', { seed: 'demo' });
+    refresh();
+    onSwitch(info.id);
+    open = false;
+  }
+
   function handleSwitch(p: ProjectInfo) {
     if (p.id === activeProjectId) {
       open = false;
@@ -153,6 +160,7 @@
   {#if open}
     <div class="menu" data-testid="projects-menu-list">
       <button class="new" data-testid="projects-new" onclick={handleNew}>+ New project…</button>
+      <button class="new demo" data-testid="projects-new-demo" onclick={handleNewDemo}>★ Demo Song</button>
       <ol>
         {#each active as p (p.id)}
           <li class="row" class:active={p.id === activeProjectId}>
@@ -287,6 +295,13 @@
     cursor: pointer;
     margin-bottom: 4px;
     text-align: left;
+  }
+  .new.demo {
+    color: #ff8c00;
+    border-color: #5a3f10;
+  }
+  .new.demo:hover {
+    background: #2a1f0a;
   }
   ol {
     list-style: none;

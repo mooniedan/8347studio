@@ -74,7 +74,7 @@ test.describe('phase-4 / M5 Container plugin', () => {
     for (let col = 0; col < 16; col++) {
       await page.click(`[data-testid="piano-cell-60-${col}"]`);
     }
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
     await expect
       .poll(() => trackPeak(page, synthIdx), { timeout: 4000, intervals: [80, 80, 120] })
       .toBeGreaterThan(0.05);
@@ -114,7 +114,7 @@ test.describe('phase-4 / M5 Container plugin', () => {
     for (let col = 0; col < 16; col++) {
       await page.click(`[data-testid="piano-cell-60-${col}"]`);
     }
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
 
     // With both branches summing 0, the chain output is silent.
     await expect

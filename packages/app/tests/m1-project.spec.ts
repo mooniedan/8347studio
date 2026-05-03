@@ -52,7 +52,7 @@ test.describe('phase-1 / M1 project state', () => {
     await expect(page.locator('.grid .cell.on')).toHaveCount(2);
 
     // BPM picked up from legacy hash.
-    await expect(page.locator('input[type="number"]')).toHaveValue('140');
+    await expect(page.locator('[data-testid="bpm-input"]')).toHaveValue('140');
 
     // Hash is cleared after migration so a refresh doesn't re-migrate.
     await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('');
@@ -66,12 +66,12 @@ test.describe('phase-1 / M1 project state', () => {
     // First load: seed via legacy hash.
     await page.goto(`/#s=${LEGACY_S}&bpm=132&w=square`);
     await expect(page.locator('.grid .cell.on')).toHaveCount(2);
-    await expect(page.locator('input[type="number"]')).toHaveValue('132');
+    await expect(page.locator('[data-testid="bpm-input"]')).toHaveValue('132');
 
     // Reload — no hash. State must come back from IndexedDB.
     await page.goto('/');
     await expect(page.locator('.grid')).toBeVisible();
     await expect(page.locator('.grid .cell.on')).toHaveCount(2);
-    await expect(page.locator('input[type="number"]')).toHaveValue('132');
+    await expect(page.locator('[data-testid="bpm-input"]')).toHaveValue('132');
   });
 });

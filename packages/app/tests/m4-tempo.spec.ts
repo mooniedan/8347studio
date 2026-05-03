@@ -19,7 +19,7 @@ async function currentTick(page: Page): Promise<number> {
 
 async function setBpm(page: Page, bpm: number) {
   await page.evaluate((v) => {
-    const el = document.querySelector('input[type="number"]') as HTMLInputElement;
+    const el = document.querySelector('[data-testid="bpm-input"]') as HTMLInputElement;
     el.value = String(v);
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }, bpm);

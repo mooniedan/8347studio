@@ -33,7 +33,7 @@ test.describe('phase-4 / M1 insert FX chain', () => {
     for (let col = 0; col < 16; col++) {
       await page.click(`[data-testid="piano-cell-60-${col}"]`);
     }
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
 
     await expect
       .poll(() => trackPeak(page, synthIdx), { timeout: 4000, intervals: [80, 80, 120] })

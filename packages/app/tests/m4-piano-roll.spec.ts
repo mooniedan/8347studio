@@ -68,7 +68,7 @@ test.describe('phase-2 / M4 piano-roll clip + scheduler', () => {
 
     // Hit play. Engine peak on the synth track climbs above the noise
     // floor as the scheduler fires NoteOn into the synth.
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
     await expect
       .poll(() => trackPeak(page, synthIdx), { timeout: 4000, intervals: [80, 80, 120] })
       .toBeGreaterThan(0.05);
@@ -92,7 +92,7 @@ test.describe('phase-2 / M4 piano-roll clip + scheduler', () => {
     await expect(page.locator('[data-testid="piano-cell-60-0"]')).not.toHaveClass(/on/);
 
     // Engine should not produce sound when there are no notes.
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
     // Give the engine a moment to process the empty schedule.
     await page.waitForTimeout(400);
     expect(await trackPeak(page, synthIdx)).toBeLessThan(0.05);
@@ -113,7 +113,7 @@ test.describe('phase-2 / M4 piano-roll clip + scheduler', () => {
       await page.click(`[data-testid="piano-cell-60-${col}"]`);
     }
 
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
 
     // Engine produces audible peak.
     await expect

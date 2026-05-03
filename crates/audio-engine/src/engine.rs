@@ -10,7 +10,7 @@ use crate::plugins::build_insert_plugin;
 use crate::plugins::subtractive::Subtractive;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
-use crate::snapshot::{InstrumentSnapshot, ProjectSnapshot};
+use crate::snapshot::{InstrumentSnapshot, LoopRegion, ProjectSnapshot};
 use crate::tempo_map::TempoMap;
 use crate::track::{InsertSlot, Send, TrackEngine};
 
@@ -40,6 +40,10 @@ pub struct Engine {
     pub playing: bool,
     /// Fractional tick position; integer view via `current_tick()`.
     tick_pos: f64,
+    /// Optional transport loop. When `Some`, `process_stereo` wraps
+    /// `tick_pos` from `end_tick` back to `start_tick` so piano-roll
+    /// clips, automation, and audio regions cycle.
+    pub loop_region: Option<LoopRegion>,
     right_scratch: Vec<f32>,
     sample_rate: f32,
 }
@@ -57,6 +61,7 @@ impl Engine {
             tempo_map: TempoMap::new(sample_rate),
             playing: false,
             tick_pos: 0.0,
+            loop_region: None,
             right_scratch: Vec::new(),
             sample_rate,
         }
@@ -197,6 +202,8 @@ impl Engine {
         // Replace automation wholesale. Phase-9 polish can keep stable
         // identity to avoid throwing away a mid-edit smoothing state.
         self.automation = snap.automation.clone();
+        // Transport loop region — `None` disables looping.
+        self.loop_region = snap.loop_region;
     }
 
     pub fn add_track(&mut self, track: TrackEngine) -> usize {
@@ -338,8 +345,43 @@ impl Engine {
         let frames = left.len();
         let prev_tick = self.current_tick();
         self.advance_tick(frames);
-        let next_tick = self.current_tick();
-        self.fire_track_schedulers(prev_tick, next_tick);
+        let mut next_tick = self.current_tick();
+        // Transport loop wrap — when `tick_pos` crosses `end_tick`,
+        // fire pending notes up to the boundary, release any held
+        // notes (so chord sustains don't bleed across the wrap), then
+        // jump back to `start_tick` and fire the post-wrap window.
+        // Automation evaluates at the wrapped tick so lanes cycle.
+        if self.playing {
+            if let Some(lr) = self.loop_region {
+                if lr.end_tick > lr.start_tick
+                    && prev_tick < lr.end_tick
+                    && next_tick >= lr.end_tick
+                {
+                    self.fire_track_schedulers(prev_tick, lr.end_tick);
+                    for t in self.tracks.iter_mut() {
+                        t.instrument
+                            .handle_event(crate::plugin::PluginEvent::AllNotesOff);
+                    }
+                    let loop_len = lr.end_tick - lr.start_tick;
+                    let overshoot = next_tick - lr.end_tick;
+                    let wrapped = lr.start_tick + (overshoot % loop_len);
+                    self.tick_pos = wrapped as f64;
+                    let bpm = self.tempo_map.bpm_at(wrapped);
+                    let ppq = 960.0_f64;
+                    let ticks_per_sec = bpm as f64 * ppq / 60.0;
+                    let secs = wrapped as f64 / ticks_per_sec.max(1e-6);
+                    self.sample_pos = (secs * self.sample_rate as f64) as u64;
+                    self.fire_track_schedulers(lr.start_tick, wrapped);
+                    next_tick = wrapped;
+                } else {
+                    self.fire_track_schedulers(prev_tick, next_tick);
+                }
+            } else {
+                self.fire_track_schedulers(prev_tick, next_tick);
+            }
+        } else {
+            self.fire_track_schedulers(prev_tick, next_tick);
+        }
         // Apply automation BEFORE rendering so this block sees the
         // automated value. Block-quantized resolution; sub-block
         // ramps are a future polish item.
@@ -554,7 +596,7 @@ fn waveform_from_u32(w: u32) -> Waveform {
 mod tests {
     use super::*;
     use crate::plugin::Plugin;
-    use crate::snapshot::{TrackKind, TrackSnapshot};
+    use crate::snapshot::{NoteSnapshot, TrackKind, TrackSnapshot};
     use core::f32::consts::FRAC_1_SQRT_2;
 
     struct ConstSource {
@@ -681,6 +723,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 0.5,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: vec![
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -729,6 +772,7 @@ mod tests {
         let mut snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "T".into(),
@@ -880,6 +924,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Drums".into(),
@@ -929,6 +974,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 0.75,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -996,6 +1042,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Synth".into(),
@@ -1034,6 +1081,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Synth".into(),
@@ -1082,6 +1130,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -1136,6 +1185,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -1190,6 +1240,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -1307,6 +1358,7 @@ mod tests {
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
             }],
+            loop_region: None,
         };
         e.apply_snapshot(&snap);
         e.set_playing(true);
@@ -1376,6 +1428,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Audio,
                 name: "Loop".into(),
@@ -1473,6 +1526,7 @@ mod tests {
         let snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Lead".into(),
@@ -1512,6 +1566,7 @@ mod tests {
         let mut snap = ProjectSnapshot {
             master_gain: 1.0,
             automation: alloc::vec![],
+            loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
                 kind: TrackKind::Midi,
                 name: "Synth".into(),
@@ -1561,5 +1616,113 @@ mod tests {
                 .abs()
                 < 1e-3
         );
+    }
+
+    #[test]
+    fn loop_region_wraps_tick_pos_at_end_back_to_start() {
+        let mut e = Engine::new(48_000.0);
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            automation: alloc::vec![],
+            loop_region: Some(LoopRegion { start_tick: 0, end_tick: 1000 }),
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "Lead".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 16,
+                instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![],
+                inserts: alloc::vec![],
+                sends: alloc::vec![],
+                audio_regions: alloc::vec![],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.set_playing(true);
+        // Locate just before the loop end and render a block big enough
+        // to cross the boundary. The post-block tick must wrap back
+        // into [start_tick, end_tick).
+        e.locate(950);
+        let mut buf = alloc::vec![0.0f32; 4_096];
+        e.process_mono(&mut buf);
+        let t = e.current_tick();
+        assert!(
+            t < 1000,
+            "tick {t} should have wrapped back below loop_end=1000"
+        );
+    }
+
+    #[test]
+    fn loop_region_fires_piano_roll_notes_each_iteration() {
+        // A single PianoRoll note at tick 100 inside a [0, 500) loop
+        // should fire NoteOn twice across two loop iterations.
+        use crate::plugin::PluginEvent;
+        use core::any::Any;
+
+        #[derive(Default)]
+        struct CountingSynth {
+            on: u32,
+        }
+        impl Plugin for CountingSynth {
+            fn process(&mut self, _i: &[&[f32]], _o: &mut [&mut [f32]], _f: usize) {}
+            fn set_param(&mut self, _: u32, _: f32) {}
+            fn handle_event(&mut self, ev: PluginEvent) {
+                if let PluginEvent::NoteOn { .. } = ev {
+                    self.on += 1;
+                }
+            }
+            fn as_any_mut(&mut self) -> &mut dyn Any { self }
+            fn as_any(&self) -> &dyn Any { self }
+        }
+
+        let mut e = Engine::new(48_000.0);
+        // Replace the default Silence on track 0 with a counting plugin.
+        // The simplest path: build via snapshot, then swap.
+        let snap = ProjectSnapshot {
+            master_gain: 1.0,
+            automation: alloc::vec![],
+            loop_region: Some(LoopRegion { start_tick: 0, end_tick: 500 }),
+            tracks: alloc::vec![TrackSnapshot {
+                kind: TrackKind::Midi,
+                name: "T".into(),
+                gain: 1.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                voices: 1,
+                instrument: InstrumentSnapshot::None,
+                steps: alloc::vec![],
+                piano_roll_notes: alloc::vec![NoteSnapshot {
+                    pitch: 60,
+                    velocity: 100,
+                    start_tick: 100,
+                    length_ticks: 50,
+                }],
+                inserts: alloc::vec![],
+                sends: alloc::vec![],
+                audio_regions: alloc::vec![],
+            }],
+        };
+        e.apply_snapshot(&snap);
+        e.tracks[0].instrument = alloc::boxed::Box::new(CountingSynth::default());
+        e.set_playing(true);
+
+        // Render enough samples to cross the loop boundary at least
+        // twice: 2× 500 ticks at 120 BPM ppq=960 → ~625 ms → ~30k
+        // frames @ 48 kHz. Render in blocks to mimic real audio.
+        for _ in 0..16 {
+            let mut buf = alloc::vec![0.0f32; 2048];
+            e.process_mono(&mut buf);
+        }
+        let cs = e.tracks[0]
+            .instrument
+            .as_any()
+            .downcast_ref::<CountingSynth>()
+            .unwrap();
+        assert!(cs.on >= 2, "expected ≥2 NoteOn fires across loop iterations, got {}", cs.on);
     }
 }

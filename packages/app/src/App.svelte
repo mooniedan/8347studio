@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import Sequencer from './lib/Sequencer.svelte';
+  import Transport from './lib/Transport.svelte';
   import TrackList from './lib/TrackList.svelte';
   import Mixer from './lib/Mixer.svelte';
   import PluginPanel from './lib/PluginPanel.svelte';
@@ -10,6 +11,7 @@
   import AudioTrackView from './lib/AudioTrackView.svelte';
   import ProjectsMenu from './lib/ProjectsMenu.svelte';
   import {
+    clearSeedHint,
     ensureDefaultProject,
     loadRegistry,
     setLastOpenedProject,
@@ -28,6 +30,9 @@
     addAutomationPoint,
     removeAutomationPoint,
     listAutomationLanes,
+    getTrackInserts,
+    getTrackSends,
+    getTrackName,
     setAssetMetadata,
     setBpm,
     setMasterGain,
@@ -40,6 +45,7 @@
     addPianoRollNote,
     readPianoRollNotes,
     getBpm,
+    getLoopRegion,
     getMidiBinding,
     setMidiBinding,
     removeMidiBinding,
@@ -195,7 +201,15 @@
   activeProjectId = initialProject.id;
 
   async function bootProject(docName: string): Promise<void> {
-    const p = await createProject({ docName });
+    // Read the per-project seed hint and clear it so a refresh of the
+    // same project doesn't re-seed (the Y.Doc already exists in IDB
+    // by the time the hint matters; createProject only seeds when
+    // the doc is empty, so this is belt-and-braces).
+    const reg = loadRegistry();
+    const info = reg.projects.find((x) => x.docName === docName);
+    const seed = info?.seed;
+    const p = await createProject({ docName, seed });
+    if (info?.id && info.seed) clearSeedHint(info.id);
     project = p;
     exposeDebugHandle(p);
     const { ring } = await audio.ensureReady();
@@ -491,6 +505,8 @@
           clipCount: p.clipById.size,
           firstClipKind: firstClip?.get('kind') ?? null,
           firstTrackGain: track?.get('gain') ?? null,
+          projectName: (p.meta.get('name') as string | undefined) ?? null,
+          loopRegion: getLoopRegion(p),
         };
       },
     });
@@ -508,6 +524,7 @@
           debugMasterGain: () => audio.debugRead('masterGain'),
           debugCurrentTick: () => audio.debugRead('currentTick'),
           debugBpm: () => audio.debugRead('bpm'),
+          debugLoopEnd: () => audio.debugRead('loopEnd'),
           debugTrackPeak: (track: number) => audio.debugRead('trackPeak', track),
           debugTrackParam: (track: number, paramId: number) =>
             audio.debugTrackParam(track, paramId),
@@ -566,6 +583,30 @@
           listAutomationLanes: () => {
             if (!project) return [];
             return listAutomationLanes(project);
+          },
+          /// Test affordance — flat snapshot of per-track inserts/sends/
+          /// names so the demo-song spec can assert the seeded shape
+          /// without reaching into the Y.Doc.
+          inspectTracks: () => {
+            if (!project) return [];
+            const out: Array<{
+              idx: number;
+              name: string;
+              inserts: { kind: string }[];
+              sends: { targetTrackIdx: number; level: number }[];
+            }> = [];
+            for (let i = 0; i < project.tracks.length; i++) {
+              out.push({
+                idx: i,
+                name: getTrackName(project, i),
+                inserts: getTrackInserts(project, i).map((s) => ({ kind: s.kind })),
+                sends: getTrackSends(project, i).map((s) => ({
+                  targetTrackIdx: s.targetTrackIdx,
+                  level: s.level,
+                })),
+              });
+            }
+            return out;
           },
           // Phase-5 M2: OPFS asset store + register_asset path.
           assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),
@@ -787,6 +828,7 @@
       </div>
     </div>
     {#key activeProjectId}
+    <Transport {project} />
     <div class="layout">
       <TrackList
         {project}
@@ -820,7 +862,7 @@
         </div>
       {:else}
         <div class="track-view">
-          <Sequencer {project} {bridge} trackIdx={selectedTrackIdx} />
+          <Sequencer {project} trackIdx={selectedTrackIdx} />
           <InsertSlots {project} trackIdx={selectedTrackIdx} />
           <SendList {project} trackIdx={selectedTrackIdx} />
         </div>

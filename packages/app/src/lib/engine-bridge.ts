@@ -615,6 +615,38 @@ export function buildSnapshot(project: Project): Uint8Array {
     u32VarintToBytes(trackBytes.length),
     ...trackBytes,
     automationBytes(project),
+    loopRegionBytes(project),
+  ]);
+}
+
+function serializeLoopRegion(project: Project): string {
+  const lr = project.meta.get('loopRegion') as
+    | { startTick?: number; endTick?: number }
+    | undefined;
+  if (!lr) return 'none';
+  return `${lr.startTick ?? 0}:${lr.endTick ?? 0}`;
+}
+
+/// Encode `meta.loopRegion` (when present + valid) as postcard's
+/// Option<LoopRegion> wire format: a 1-byte tag (0=None, 1=Some)
+/// optionally followed by two u64 varints. Mirrors
+/// crates/audio-engine/src/snapshot.rs::LoopRegion.
+function loopRegionBytes(project: Project): Uint8Array {
+  const lr = project.meta.get('loopRegion') as
+    | { startTick: number; endTick: number }
+    | undefined;
+  if (!lr || typeof lr.startTick !== 'number' || typeof lr.endTick !== 'number') {
+    return new Uint8Array([0]);
+  }
+  const start = Math.max(0, Math.floor(lr.startTick));
+  const end = Math.max(0, Math.floor(lr.endTick));
+  if (end <= start) {
+    return new Uint8Array([0]);
+  }
+  return concat([
+    new Uint8Array([1]),
+    u64VarintToBytes(start),
+    u64VarintToBytes(end),
   ]);
 }
 
@@ -724,11 +756,19 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   // (engine state changes per-block) so they don't trigger a snapshot
   // rebuild.
   let lastMasterGain = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
+  let lastLoopRegionKey = serializeLoopRegion(project);
   const onMetaChange = () => {
     const next = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
     if (next !== lastMasterGain) {
       lastMasterGain = next;
       writer.write(encodeSetMasterGain(next));
+    }
+    // Loop region lives in meta — changes need a snapshot rebuild
+    // because the wire format carries it, not a per-block SAB event.
+    const lrKey = serializeLoopRegion(project);
+    if (lrKey !== lastLoopRegionKey) {
+      lastLoopRegionKey = lrKey;
+      rebuild();
     }
   };
   project.meta.observe(onMetaChange);

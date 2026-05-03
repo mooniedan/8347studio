@@ -18,6 +18,17 @@ pub struct ProjectSnapshot {
     /// (tick, value) points evaluated each audio block via linear
     /// interpolation.
     pub automation: Vec<AutomationLane>,
+    /// Optional transport loop region. When set and end > start, the
+    /// engine wraps `tick_pos` from `end` back to `start` during
+    /// playback so PianoRoll clips and automation cycle. None = no
+    /// looping.
+    pub loop_region: Option<LoopRegion>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopRegion {
+    pub start_tick: u64,
+    pub end_tick: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

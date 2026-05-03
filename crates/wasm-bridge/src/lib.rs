@@ -29,6 +29,21 @@ fn seq_at(track_idx: u32) -> Option<&'static mut Sequencer> {
     }
 }
 
+/// First Sequencer-backed track in the project, if any. Used by the
+/// playhead-readback path so the step-grid animation works regardless
+/// of where the StepSeq track sits in the track list (it isn't always
+/// at index 0 — e.g., the demo song has the Subtractive lead first).
+fn first_seq() -> Option<&'static mut Sequencer> {
+    unsafe {
+        for t in engine().tracks.iter_mut() {
+            if let Some(s) = t.instrument.as_any_mut().downcast_mut::<Sequencer>() {
+                return Some(s);
+            }
+        }
+        None
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn init(sample_rate: f32) {
     let mut engine = Engine::new(sample_rate);
@@ -171,7 +186,7 @@ pub extern "C" fn set_playing(on: u32) {
 
 #[no_mangle]
 pub extern "C" fn get_current_step() -> i32 {
-    seq_at(0).map(|s| s.current_step()).unwrap_or(-1)
+    first_seq().map(|s| s.current_step()).unwrap_or(-1)
 }
 
 #[no_mangle]
@@ -238,6 +253,19 @@ pub extern "C" fn debug_bpm() -> f32 {
 #[no_mangle]
 pub extern "C" fn debug_asset_count() -> u32 {
     unsafe { engine().asset_cache.len() as u32 }
+}
+
+/// Engine-side loop region readback. Returns end_tick when set, 0
+/// when no loop is active. Used to verify the snapshot wire format
+/// preserves the loop region across the JS → engine boundary.
+#[no_mangle]
+pub extern "C" fn debug_loop_end() -> f64 {
+    unsafe {
+        engine()
+            .loop_region
+            .map(|lr| lr.end_tick as f64)
+            .unwrap_or(0.0)
+    }
 }
 
 /// Read back a plugin parameter from the addressed track. Returns NaN

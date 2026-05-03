@@ -49,7 +49,7 @@ test.describe('phase-4 / M2 bus tracks + send routing', () => {
     for (let col = 0; col < 16; col++) {
       await page.click(`[data-testid="piano-cell-60-${col}"]`);
     }
-    await page.click('[data-testid="piano-play"]');
+    await page.click('button.play');
 
     // Synth peak should climb when the dry path is live.
     await expect
