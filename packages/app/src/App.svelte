@@ -108,12 +108,28 @@
   });
   // Track-color accent strip on the canvas header (Phase 7 M3) —
   // surfaces the selected track's identity color across all editor
-  // views without each editor needing to know about it.
+  // views without each editor needing to know about it. Sourced from
+  // a `trackMetaVersion` counter so Y.Doc mutations to name/color
+  // trigger Svelte reactivity (the derived needs an observed signal
+  // since Y.Doc reads aren't reactive on their own).
+  let trackMetaVersion = $state(0);
+  $effect(() => {
+    if (!project) return;
+    const bump = () => { trackMetaVersion++; };
+    project.trackById.observeDeep(bump);
+    project.tracks.observe(bump);
+    return () => {
+      project.trackById.unobserveDeep(bump);
+      project.tracks.unobserve(bump);
+    };
+  });
   let selectedTrackColor = $derived.by((): string => {
+    void trackMetaVersion;
     if (!project) return 'transparent';
     return getTrackColor(project, selectedTrackIdx);
   });
   let selectedTrackNameValue = $derived.by((): string => {
+    void trackMetaVersion;
     if (!project) return '';
     return getTrackName(project, selectedTrackIdx);
   });
@@ -949,10 +965,13 @@
         {/key}
       </main>
 
-      <!-- RIGHT INSPECTOR: collapsible. M2 empty stub; M4 populates. -->
+      <!-- RIGHT INSPECTOR: collapsible. Shows the selected track's
+           identity + summary (Phase 7 M4). -->
       <Inspector
         bind:collapsed={layout.inspectorCollapsed}
         width={layout.inspectorWidth}
+        {project}
+        selectedTrackIdx={selectedTrackIdx}
       />
 
       <!-- BOTTOM DRAWER: collapsible mixer. -->

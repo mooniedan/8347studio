@@ -1407,6 +1407,22 @@ export function setMasterGain(p: Project, gain: number): void {
   p.meta.set('masterGain', Math.max(0, Math.min(1, gain)));
 }
 
+/// Phase 7 M4 — inspector mutators for track identity. Name is a
+/// free-form string; color is a hex code from the saturated palette
+/// in `track-color.ts` (callers should round-robin via
+/// `defaultColorForIndex` rather than typing hex by hand).
+export function setTrackName(p: Project, idx: number, name: string): void {
+  if (idx < 0 || idx >= p.tracks.length) return;
+  const id = p.tracks.get(idx);
+  p.trackById.get(id)?.set('name', name);
+}
+
+export function setTrackColor(p: Project, idx: number, color: string): void {
+  if (idx < 0 || idx >= p.tracks.length) return;
+  const id = p.tracks.get(idx);
+  p.trackById.get(id)?.set('color', color);
+}
+
 export function setTrackMute(p: Project, idx: number, mute: boolean): void {
   if (idx < 0 || idx >= p.tracks.length) return;
   const id = p.tracks.get(idx);
