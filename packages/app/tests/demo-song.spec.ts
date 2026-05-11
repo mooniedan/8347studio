@@ -1,10 +1,19 @@
 import { test, expect, type Page } from '@playwright/test';
 
-// Demo Song — built-in feature-tour project. Verifies that clicking
-// "★ Demo Song" from the projects menu seeds a project containing the
-// expected feature footprint (tracks, BPM, piano-roll notes, bus,
-// inserts, sends, automation). When new features land, append a new
-// block in seedDemoSong() and add the matching assertion here.
+// Demo Song — built-in feature-tour project + the project's
+// cumulative audible regression test.
+//
+// Project-level commitment (.claude/overview-plan.md cross-cutting
+// commitment #7 / CLAUDE.md):
+//   Every new user-facing feature that can live in a project MUST:
+//     1. Add a block to `seedDemoSong` in
+//        packages/app/src/lib/project.ts.
+//     2. Add the matching assertion below.
+//     3. Be audibly exercised when the user clicks "★ Demo Song"
+//        from a clean slate.
+//   This file is the canary for "what works end-to-end today." If
+//   you shipped a feature and didn't grow this spec, the demo
+//   drifted away from reality — please fix it before merging.
 
 interface ProjectShape {
   trackCount: number;
