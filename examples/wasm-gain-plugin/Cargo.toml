@@ -1,0 +1,15 @@
+[package]
+name = "wasm-gain-plugin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "8347 Studio — minimal reference plugin (1-param gain effect)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = "symbols"
+panic = "abort"

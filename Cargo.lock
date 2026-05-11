@@ -141,3 +141,7 @@ version = "0.1.0"
 dependencies = [
  "audio-engine",
 ]
+
+[[package]]
+name = "wasm-gain-plugin"
+version = "0.1.0"
