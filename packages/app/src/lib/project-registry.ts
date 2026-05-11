@@ -15,6 +15,11 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 const STORAGE_KEY = '8347-studio-projects';
 export const LEGACY_DOC_NAME = '8347-studio-project';
 export const DEFAULT_PROJECT_ID = 'default';
+/// Reserved id for the in-memory demo session. The demo never lives
+/// in the registry — clicking ★ Demo Song always re-seeds a fresh,
+/// ephemeral Y.Doc with this id. Editing the demo triggers a
+/// "save as" prompt that forks into a real registered project.
+export const DEMO_PROJECT_ID = '__demo__';
 /// Warn the user when archived projects exceed this many bytes.
 export const TRASH_WARN_BYTES = 100 * 1024 * 1024; // 100 MB
 

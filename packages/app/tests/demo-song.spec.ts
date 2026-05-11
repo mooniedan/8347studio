@@ -268,24 +268,52 @@ test.describe('demo song', () => {
     await expect(page.locator('select').first()).toHaveValue('saw');
   });
 
-  test('demo song persists across reload', async ({ page }) => {
+  test('demo song is ephemeral — reload drops the demo and lands on a regular project', async ({ page }) => {
     await page.goto('/');
     await bridgeReady(page);
 
     await page.click('[data-testid="projects-menu"]');
     await page.click('[data-testid="projects-new-demo"]');
     await bridgeReady(page);
-
     await expect.poll(() => projectShape(page).then((s) => s.projectName)).toBe('Demo Song');
-    const before = await inspectTracks(page);
+    // Banner is visible while we're in the demo slot.
+    await expect(page.getByTestId('demo-banner')).toBeVisible();
 
     await page.reload();
     await bridgeReady(page);
 
+    // After reload the demo is gone; we land on whatever regular
+    // project was last opened (default 'My Project', or any other).
+    await expect.poll(() => projectShape(page).then((s) => s.projectName)).not.toBe('Demo Song');
+    await expect(page.getByTestId('demo-banner')).toHaveCount(0);
+  });
+
+  test('★ Demo Song re-seeds fresh on each click (no stacking duplicates)', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+
+    // First click — fresh demo.
+    await page.click('[data-testid="projects-menu"]');
+    await page.click('[data-testid="projects-new-demo"]');
     await expect.poll(() => projectShape(page).then((s) => s.projectName)).toBe('Demo Song');
-    const after = await inspectTracks(page);
-    expect(after.length).toBe(before.length);
-    expect(after[0].inserts.length).toBe(before[0].inserts.length);
-    expect(after[2].inserts.length).toBe(before[2].inserts.length);
+    const firstShape = await projectShape(page);
+
+    // Make an edit to dirty the demo (add another synth track).
+    await page.getByTestId('add-synth-track').click();
+
+    // Click ★ Demo Song again — should re-seed, not stack.
+    await page.click('[data-testid="projects-menu"]');
+    await page.click('[data-testid="projects-new-demo"]');
+    await page.waitForTimeout(200);
+    const secondShape = await projectShape(page);
+    expect(secondShape.trackCount).toBe(firstShape.trackCount);
+
+    // Registry should NOT have multiple Demo Song entries.
+    const demoCount = await page.evaluate(() => {
+      const raw = localStorage.getItem('8347-studio-projects');
+      const reg = raw ? JSON.parse(raw) : { projects: [] };
+      return reg.projects.filter((p: { name: string }) => p.name === 'Demo Song').length;
+    });
+    expect(demoCount).toBe(0);
   });
 });

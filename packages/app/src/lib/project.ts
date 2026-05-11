@@ -57,14 +57,23 @@ export interface CreateProjectOptions {
   /// One-shot seed selector for a fresh Y.Doc. Ignored if the doc
   /// already has tracks (re-opening an existing project).
   seed?: SeedMode;
+  /// When true, skip IndexedDB persistence entirely — the Y.Doc lives
+  /// in memory only. Used by the Demo Song slot so edits never hit
+  /// disk; the user is prompted to fork into a regular project if
+  /// they want to keep their changes.
+  ephemeral?: boolean;
 }
 
 export async function createProject(opts: CreateProjectOptions = {}): Promise<Project> {
   const docName = opts.docName ?? PROJECT_DOC_NAME;
   const doc = new Y.Doc();
-  const provider = new IndexeddbPersistence(docName, doc);
-  const project: Project = attach(doc, () => provider.destroy());
-  await provider.whenSynced;
+  let destroy: () => void = () => {};
+  if (!opts.ephemeral) {
+    const provider = new IndexeddbPersistence(docName, doc);
+    destroy = () => provider.destroy();
+    await provider.whenSynced;
+  }
+  const project: Project = attach(doc, destroy);
 
   const legacy = parseLegacyHash();
   if (legacy) {

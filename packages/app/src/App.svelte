@@ -16,10 +16,13 @@
   import { createLayoutState } from './lib/layout-prefs.svelte';
   import {
     clearSeedHint,
+    createProjectInfo,
+    DEMO_PROJECT_ID,
     ensureDefaultProject,
     loadRegistry,
     setLastOpenedProject,
   } from './lib/project-registry';
+  import * as Y from 'yjs';
   import {
     createProject,
     addSubtractiveTrack,
@@ -255,17 +258,53 @@
     initialRegistry.projects[0];
   activeProjectId = initialProject.id;
 
-  async function bootProject(docName: string): Promise<void> {
+  // Phase-7 follow-up — the demo song lives in a reserved, ephemeral
+  // in-memory slot. `inDemo` drives the save-as banner; `demoDirty`
+  // flips on the user's first edit so the banner appears exactly
+  // when there's something worth preserving.
+  let inDemo = $state(false);
+  let demoDirty = $state(false);
+  let demoSaveAsOpen = $state(false);
+  let demoSaveAsName = $state('My Beat');
+
+  async function bootProject(docName: string, opts: { ephemeral?: boolean; seed?: 'demo' } = {}): Promise<void> {
     // Read the per-project seed hint and clear it so a refresh of the
     // same project doesn't re-seed (the Y.Doc already exists in IDB
     // by the time the hint matters; createProject only seeds when
     // the doc is empty, so this is belt-and-braces).
     const reg = loadRegistry();
     const info = reg.projects.find((x) => x.docName === docName);
-    const seed = info?.seed;
-    const p = await createProject({ docName, seed });
+    const seed = opts.seed ?? info?.seed;
+    const p = await createProject({ docName, seed, ephemeral: opts.ephemeral });
     if (info?.id && info.seed) clearSeedHint(info.id);
     project = p;
+
+    // Watch for the first user edit on an ephemeral demo. Anything
+    // that arrives synchronously during boot is treated as part of
+    // the seed; the next microtask flips into user-edit mode.
+    demoDirty = false;
+    if (opts.ephemeral) {
+      const doc = p.doc;
+      const armDirtyWatcher = () => {
+        const onUpdate = (_update: Uint8Array, origin: unknown) => {
+          // Seed runs inside `p.doc.transact(...)` with no explicit
+          // origin; mutations from the UI also have no origin. We
+          // arm the watcher after a microtask so any seed-time
+          // updates have already drained, and treat the next update
+          // as the first user edit.
+          void origin;
+          demoDirty = true;
+          doc.off('update', onUpdate);
+        };
+        doc.on('update', onUpdate);
+      };
+      // Two layers of "wait for the seed to settle":
+      //   1. microtask — the transact's commit phase
+      //   2. animation frame — any cascading observers (e.g.
+      //      engine-bridge writing meta.installedPlugins) that fire
+      //      shortly after attach
+      queueMicrotask(() => requestAnimationFrame(armDirtyWatcher));
+    }
     exposeDebugHandle(p);
     const { ring } = await audio.ensureReady();
     bridge = attachBridge(p, { ring, postRebuild: audio.postRebuild });
@@ -346,12 +385,7 @@
 
   const ready = bootProject(initialProject.docName);
 
-  async function switchProject(id: string): Promise<void> {
-    if (id === activeProjectId) return;
-    const reg = loadRegistry();
-    const next = reg.projects.find((p) => p.id === id);
-    if (!next) return;
-    // Tear down the live wiring bound to the old project.
+  async function tearDownCurrent(): Promise<void> {
     pipController?.destroy();
     pipController = null;
     rootSyncHandle?.destroy();
@@ -362,10 +396,76 @@
     bridge = null;
     project?.destroy();
     project = null;
+  }
+
+  async function switchProject(id: string): Promise<void> {
+    // Demo slot: re-seeds on every click, even when we're already
+    // on the demo. The user clicking ★ Demo Song again is an
+    // explicit reset intent — discard any in-flight edits.
+    if (id === DEMO_PROJECT_ID) {
+      await tearDownCurrent();
+      activeProjectId = DEMO_PROJECT_ID;
+      inDemo = true;
+      selectedTrackIdx = 0;
+      // Use a stable docName so the read path (engine-bridge etc.)
+      // has a name to log, but `ephemeral: true` keeps it off disk.
+      await bootProject('__demo__', { ephemeral: true, seed: 'demo' });
+      return;
+    }
+
+    if (id === activeProjectId) return;
+    const reg = loadRegistry();
+    const next = reg.projects.find((p) => p.id === id);
+    if (!next) return;
+    await tearDownCurrent();
     setLastOpenedProject(id);
     activeProjectId = id;
+    inDemo = false;
     selectedTrackIdx = 0;
     await bootProject(next.docName);
+  }
+
+  /// Fork the current ephemeral demo Y.Doc into a new persistent
+  /// project. Captures the doc state via Y.encodeStateAsUpdate, then
+  /// creates a registered project + IndexedDB-backed Y.Doc and
+  /// applies the update so the user's edits land intact. Switches
+  /// to the new project; the demo's in-memory copy stays untouched,
+  /// so the next ★ Demo Song click still seeds the canonical demo.
+  async function saveDemoAs(name: string): Promise<void> {
+    if (!project) return;
+    if (!inDemo) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const state = Y.encodeStateAsUpdate(project.doc);
+    const info = createProjectInfo(trimmed);
+    // Tear down the demo; boot the new project; apply the captured
+    // state. createProject seeds the doc with defaults if empty, so
+    // we need to skip the seed by writing state BEFORE attaching
+    // engine-bridge etc. The cleanest way: write to the new IDB
+    // store directly, then boot normally.
+    await tearDownCurrent();
+    // Pre-seed the new IndexedDB store with the demo's state.
+    const doc = new Y.Doc();
+    const { IndexeddbPersistence } = await import('y-indexeddb');
+    const provider = new IndexeddbPersistence(info.docName, doc);
+    await provider.whenSynced;
+    Y.applyUpdate(doc, state);
+    // Force a flush so the data persists before we destroy.
+    await new Promise<void>((resolve) => {
+      // y-indexeddb flushes on local update; the applyUpdate above
+      // already triggers a write. Give it one microtask to land.
+      queueMicrotask(resolve);
+    });
+    provider.destroy();
+    doc.destroy();
+
+    setLastOpenedProject(info.id);
+    activeProjectId = info.id;
+    inDemo = false;
+    demoDirty = false;
+    demoSaveAsOpen = false;
+    selectedTrackIdx = 0;
+    await bootProject(info.docName);
   }
 
   // Phase-6 M5: tick-publishing loop. Runs while transport is on,
@@ -967,6 +1067,51 @@
           <span class="track-name" data-testid="canvas-track-name">{selectedTrackNameValue}</span>
           {#if selectedTrackKind}<span class="track-kind">{selectedTrackKind}</span>{/if}
         </header>
+
+        {#if inDemo}
+          <div class="demo-banner" data-testid="demo-banner" role="status">
+            <span class="demo-tag">★ DEMO</span>
+            {#if demoDirty}
+              <span class="demo-msg">Edits to the Demo Song aren't saved.</span>
+              {#if demoSaveAsOpen}
+                <form
+                  class="save-form"
+                  onsubmit={(e) => {
+                    e.preventDefault();
+                    void saveDemoAs(demoSaveAsName);
+                  }}
+                >
+                  <input
+                    class="save-name"
+                    data-testid="demo-save-name"
+                    bind:value={demoSaveAsName}
+                    placeholder="My Beat"
+                    autocomplete="off"
+                  />
+                  <button
+                    type="submit"
+                    class="save-go"
+                    data-testid="demo-save-confirm"
+                  >Save</button>
+                  <button
+                    type="button"
+                    class="save-cancel"
+                    data-testid="demo-save-cancel"
+                    onclick={() => (demoSaveAsOpen = false)}
+                  >Cancel</button>
+                </form>
+              {:else}
+                <button
+                  class="save-as"
+                  data-testid="demo-save-as"
+                  onclick={() => (demoSaveAsOpen = true)}
+                >Save as new project…</button>
+              {/if}
+            {:else}
+              <span class="demo-msg">Read-only demo. Edit anything to fork into a real project.</span>
+            {/if}
+          </div>
+        {/if}
         {#key activeProjectId}
           {#if selectedTrackKind === 'Audio'}
             <div class="track-view">
@@ -1240,9 +1385,67 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
-  .canvas > :global(*:not(.canvas-head)) {
+  .canvas > :global(*:not(.canvas-head):not(.demo-banner)) {
     padding: var(--sp-4);
   }
+
+  .demo-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4);
+    background: var(--accent-tint);
+    border-bottom: 1px solid var(--accent-lo);
+    color: var(--fg-1);
+    font-size: var(--text-11);
+    flex-shrink: 0;
+  }
+  .demo-tag {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .demo-msg { color: var(--fg-1); }
+  .save-as,
+  .save-go,
+  .save-cancel {
+    font-family: var(--font-sans);
+    font-size: var(--text-11);
+    height: 22px;
+    padding: 0 var(--sp-3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line-2);
+    background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+    color: var(--fg-0);
+    cursor: pointer;
+  }
+  .save-as:hover, .save-go:hover, .save-cancel:hover {
+    background: linear-gradient(180deg, #2a2e36, var(--bg-3));
+  }
+  .save-go {
+    background: linear-gradient(180deg, var(--accent-hi), var(--accent), var(--accent-lo));
+    border-color: var(--accent-lo);
+    color: var(--accent-fg);
+  }
+  .save-form {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-left: auto;
+  }
+  .save-name {
+    height: 22px;
+    padding: 0 var(--sp-2);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line-2);
+    background: var(--bg-0);
+    color: var(--fg-0);
+    font-family: var(--font-sans);
+    font-size: var(--text-11);
+  }
+  .save-as { margin-left: auto; }
   .synth-stack,
   .track-view {
     display: flex;

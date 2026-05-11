@@ -5,6 +5,7 @@
     archiveProject,
     archivedProjects,
     createProjectInfo,
+    DEMO_PROJECT_ID,
     emptyTrash,
     loadRegistry,
     purgeProject,
@@ -70,9 +71,10 @@
   }
 
   function handleNewDemo() {
-    const info = createProjectInfo('Demo Song', { seed: 'demo' });
-    refresh();
-    onSwitch(info.id);
+    // The demo lives in an in-memory slot — switching to its reserved
+    // id re-seeds it fresh each click. App.svelte handles the actual
+    // creation; the menu just signals intent.
+    onSwitch(DEMO_PROJECT_ID);
     open = false;
   }
 
