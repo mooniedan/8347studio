@@ -24,6 +24,7 @@ interface ProjectShape {
 interface TrackInfo {
   idx: number;
   name: string;
+  color: string;
   inserts: { kind: string }[];
   sends: { targetTrackIdx: number; level: number }[];
 }
@@ -126,6 +127,28 @@ test.describe('demo song', () => {
     });
     expect(loop).not.toBeNull();
     expect(loop!.endTick).toBeGreaterThan(loop!.startTick);
+
+    // Phase-7 M3 — per-track identity color. The seed overrides the
+    // default round-robin palette with semantic colors (warm lead,
+    // deep bass, effect bus); all three are distinct.
+    const colors = tracks.slice(0, 3).map((t) => t.color.toLowerCase());
+    expect(colors[0]).toBe('#ff8a3d'); // Lead — orange
+    expect(colors[1]).toBe('#4a9eff'); // Bass — blue
+    expect(colors[2]).toBe('#a06bff'); // Reverb Bus — purple
+    expect(new Set(colors).size).toBe(3);
+
+    // Phase-3 M4 — a stored MIDI Learn binding survives in the seed
+    // so the demo demonstrates the workflow even without a hardware
+    // controller present. CC#74 → lead filter cutoff (paramId 6).
+    const binding = await page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: { getMidiBinding: (cc: number) => { trackIdx: number; paramId: number } | null };
+      };
+      return w.__bridge.getMidiBinding(74);
+    });
+    expect(binding).not.toBeNull();
+    expect(binding!.trackIdx).toBe(0);
+    expect(binding!.paramId).toBe(6);
   });
 
   test('loop toggle + bar inputs control project.meta.loopRegion', async ({ page }) => {

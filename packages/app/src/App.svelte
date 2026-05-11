@@ -114,13 +114,14 @@
   // since Y.Doc reads aren't reactive on their own).
   let trackMetaVersion = $state(0);
   $effect(() => {
-    if (!project) return;
+    const p = project;
+    if (!p) return;
     const bump = () => { trackMetaVersion++; };
-    project.trackById.observeDeep(bump);
-    project.tracks.observe(bump);
+    p.trackById.observeDeep(bump);
+    p.tracks.observe(bump);
     return () => {
-      project.trackById.unobserveDeep(bump);
-      project.tracks.unobserve(bump);
+      p.trackById.unobserveDeep(bump);
+      p.tracks.unobserve(bump);
     };
   });
   let selectedTrackColor = $derived.by((): string => {
@@ -647,6 +648,7 @@
             const out: Array<{
               idx: number;
               name: string;
+              color: string;
               inserts: { kind: string }[];
               sends: { targetTrackIdx: number; level: number }[];
             }> = [];
@@ -654,6 +656,7 @@
               out.push({
                 idx: i,
                 name: getTrackName(project, i),
+                color: getTrackColor(project, i),
                 inserts: getTrackInserts(project, i).map((s) => ({ kind: s.kind })),
                 sends: getTrackSends(project, i).map((s) => ({
                   targetTrackIdx: s.targetTrackIdx,
@@ -662,6 +665,12 @@
               });
             }
             return out;
+          },
+          /// Phase-3 M4 — inspector backdoor for the demo-song spec to
+          /// assert the seeded `CC#74 → lead filter cutoff` binding.
+          getMidiBinding: (cc: number) => {
+            if (!project) return null;
+            return getMidiBinding(project, cc);
           },
           // Phase-5 M2: OPFS asset store + register_asset path.
           assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),

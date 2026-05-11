@@ -268,7 +268,21 @@ function seedDemoSong(p: Project): void {
     // automation cycle in lock-step with it).
     setLoopRegion(p, { startTick: 0, endTick: progTicks });
 
-    // 11. (deferred) Audio track / OPFS region. Phase-5 audio assets
+    // 11. Phase-7 M3 — semantic per-track color identity. Override
+    // the default round-robin colors with palette entries that match
+    // each track's role (warm lead, deep bass, effect bus) so the
+    // user can see customizable color stripes at first glance.
+    setTrackColor(p, leadIdx,      TRACK_PALETTE[1]); // orange
+    setTrackColor(p, bassIdx,      TRACK_PALETTE[5]); // blue
+    setTrackColor(p, reverbBusIdx, TRACK_PALETTE[6]); // purple
+
+    // 12. Phase-3 M4 — a stored MIDI Learn binding for the lead's
+    // filter cutoff (CC#74, the de-facto "cutoff" CC). Plug in any
+    // MIDI controller, twist the cutoff knob, and the lead opens up
+    // without first using the Learn workflow.
+    setMidiBinding(p, 74, { trackIdx: leadIdx, paramId: SUB_FILTER_CUTOFF });
+
+    // 13. (deferred) Audio track / OPFS region. Phase-5 audio assets
     // need a sample shipped with the app; deciding what to bundle
     // (size, licensing) is a separate task. When the sample is in
     // place: addAudioTrack + addAudioRegion here.
