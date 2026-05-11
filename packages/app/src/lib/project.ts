@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
+import { TRACK_PALETTE } from './track-color';
 
 // Y.Doc-backed project state. Schema mirrors `.claude/dream.md` § "Project
 // state shape (Yjs)" so later phases extend the same shape rather than
@@ -332,7 +333,6 @@ function defaultEmptySteps(): number[] {
   return Array<number>(STEPS_PER_CLIP).fill(0);
 }
 
-const TRACK_PALETTE = ['#ff8c00', '#3aa9ff', '#7cd64a', '#e34dff', '#ffd84a', '#ff5c8a'];
 
 function createMidiTrack(p: Project, waveform: Waveform): { trackId: string } {
   const trackId = makeId('track');

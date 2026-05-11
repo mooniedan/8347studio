@@ -82,6 +82,37 @@
     if (Number.isFinite(v)) setBpm(project, Math.max(20, Math.min(300, v)));
   }
 
+  // Phase 7 M3 — click-and-drag on the BPM input (vertical pointer
+  // drag, shift = 0.1× sensitivity). The native number-input still
+  // accepts typed values and wheel; this layer adds the drag.
+  let bpmDrag: { y: number; start: number } | null = null;
+  function onBpmPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    if (document.activeElement === e.currentTarget) return; // typing — don't hijack
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    bpmDrag = { y: e.clientY, start: bpm };
+    e.preventDefault();
+  }
+  function onBpmPointerMove(e: PointerEvent) {
+    if (!bpmDrag) return;
+    const dy = bpmDrag.y - e.clientY;
+    const step = e.shiftKey ? 0.1 : 1;
+    const next = Math.max(20, Math.min(300, bpmDrag.start + Math.round(dy * step)));
+    setBpm(project, next);
+  }
+  function onBpmPointerUp(e: PointerEvent) {
+    if (!bpmDrag) return;
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    bpmDrag = null;
+  }
+  function onBpmWheel(e: WheelEvent) {
+    e.preventDefault();
+    const dir = e.deltaY < 0 ? 1 : -1;
+    const step = e.shiftKey ? 0.1 : 1;
+    const next = Math.max(20, Math.min(300, bpm + dir * step));
+    setBpm(project, Math.round(next));
+  }
+
   function commitLoop() {
     if (!loopEnabled) {
       setLoopRegion(project, null);
@@ -179,7 +210,8 @@
       data-testid="loop-end-bar"
     />
   </label>
-  <label>bpm
+  <label class="bpm-label">
+    <span class="bpm-cap">BPM</span>
     <input
       type="number"
       min="20"
@@ -187,56 +219,103 @@
       value={bpm}
       oninput={onBpmInput}
       data-testid="bpm-input"
+      class="bpm-input num"
+      onpointerdown={onBpmPointerDown}
+      onpointermove={onBpmPointerMove}
+      onpointerup={onBpmPointerUp}
+      onwheel={onBpmWheel}
+      title="Drag vertically (shift = fine), wheel, or type"
     />
   </label>
-  <span class="tick-readout" data-testid="current-tick">tick {currentTick}</span>
+  <span class="tick-readout num" data-testid="current-tick">
+    <span class="tick-cap">TICK</span>{currentTick}
+  </span>
 </div>
 
 <style>
+  /* Phase 7 M3 — Transport reskinned to design tokens. Lives inside
+     the 48px top bar; horizontal flex, mono numerics for BPM + tick,
+     accent green/red play button. */
   .transport {
     display: flex;
-    gap: 12px;
+    gap: var(--sp-3);
     align-items: center;
-    padding: 6px 10px;
-    background: #161616;
-    border: 1px solid #2a2a2a;
-    color: #ddd;
-    font: 12px system-ui, sans-serif;
-    flex-wrap: wrap;
+    height: 100%;
+    color: var(--fg-0);
+    font-family: var(--font-sans);
+    font-size: var(--text-12);
   }
-  .transport label { display: flex; gap: 6px; align-items: center; }
-  .transport input[type="number"] { font: inherit; padding: 2px 4px; width: 64px; }
+  .transport label { display: flex; gap: 6px; align-items: center; color: var(--fg-2); }
+
+  .transport input[type="number"] {
+    font-family: var(--font-mono);
+    font-size: var(--text-12);
+    font-variant-numeric: tabular-nums;
+    padding: 2px 4px;
+    background: var(--bg-0);
+    color: var(--fg-0);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-sm);
+    box-shadow: var(--shadow-inset);
+    width: 64px;
+    height: 22px;
+  }
+  .transport input[type="number"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
   .loop-bars input[type="number"] { width: 44px; }
-  .loop-bars.disabled { color: #666; }
+  .loop-bars.disabled { color: var(--fg-3); }
+
+  .bpm-label .bpm-cap,
+  .tick-readout .tick-cap {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--fg-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .bpm-input { cursor: ns-resize; }
+
+  .tick-readout {
+    color: var(--fg-1);
+    font-family: var(--font-mono);
+    font-size: var(--text-11);
+    font-variant-numeric: tabular-nums;
+    padding: 0 var(--sp-2);
+  }
+
   button.play {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 14px;
-    font: inherit;
+    padding: 0 var(--sp-3);
+    font-family: var(--font-sans);
+    font-size: var(--text-11);
     font-weight: 600;
     color: #0c1108;
     background: linear-gradient(180deg, #6cf06c 0%, #2ec92e 100%);
     border: 1px solid #1f8f1f;
-    border-radius: 4px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    border-radius: var(--r-sm);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 1px 2px rgba(0, 0, 0, 0.4);
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    height: 26px;
   }
-  button.play:hover {
-    filter: brightness(1.08);
-  }
+  button.play:hover { filter: brightness(1.08); }
   button.play:active {
-    transform: translateY(1px);
-    box-shadow: 0 0 0 rgba(0, 0, 0, 0), inset 0 1px 2px rgba(0, 0, 0, 0.3);
+    transform: translateY(0.5px);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
   }
   button.play.playing {
-    color: #190a0a;
-    background: linear-gradient(180deg, #ff7a7a 0%, #d62525 100%);
-    border-color: #8e1414;
+    color: var(--accent-fg);
+    background: linear-gradient(180deg, var(--accent-hi), var(--accent), var(--accent-lo));
+    border-color: var(--accent-lo);
   }
   .play-icon { font-size: 13px; line-height: 1; }
-  .play-label { font-size: 11px; }
-  .tick-readout { color: #999; font: 11px ui-monospace, monospace; }
+  .play-label { font-size: var(--text-10); }
 </style>

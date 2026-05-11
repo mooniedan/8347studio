@@ -12,6 +12,7 @@
   import ProjectsMenu from './lib/ProjectsMenu.svelte';
   import Inspector from './lib/Inspector.svelte';
   import MixerDrawer from './lib/MixerDrawer.svelte';
+  import MasterMeter from './lib/MasterMeter.svelte';
   import { createLayoutState } from './lib/layout-prefs.svelte';
   import {
     clearSeedHint,
@@ -43,6 +44,7 @@
     setTrackMute,
     setTrackSolo,
     getTrackPluginId,
+    getTrackColor,
     getArmedTrackIdx,
     getPianoRollClipForTrack,
     addPianoRollNote,
@@ -103,6 +105,17 @@
     const id = project.tracks.get(selectedTrackIdx);
     const t = project.trackById.get(id);
     return (t?.get('kind') as string | undefined) ?? null;
+  });
+  // Track-color accent strip on the canvas header (Phase 7 M3) —
+  // surfaces the selected track's identity color across all editor
+  // views without each editor needing to know about it.
+  let selectedTrackColor = $derived.by((): string => {
+    if (!project) return 'transparent';
+    return getTrackColor(project, selectedTrackIdx);
+  });
+  let selectedTrackNameValue = $derived.by((): string => {
+    if (!project) return '';
+    return getTrackName(project, selectedTrackIdx);
   });
 
   // Phase-5 M5: per-Audio-track recorder state. One recorder at a
@@ -772,6 +785,8 @@
           <div class="transport-host"><Transport {project} /></div>
         {/key}
 
+        <MasterMeter />
+
         <div class="spacer"></div>
 
         <button
@@ -889,6 +904,15 @@
       <!-- MAIN CANVAS: the per-track editor (Sequencer / PianoRoll /
            AudioTrackView, plus insert + send rows). -->
       <main class="canvas" data-testid="canvas">
+        <header class="canvas-head" data-testid="canvas-head">
+          <span
+            class="track-stripe"
+            data-testid="canvas-track-stripe"
+            style:background={selectedTrackColor}
+          ></span>
+          <span class="track-name" data-testid="canvas-track-name">{selectedTrackNameValue}</span>
+          {#if selectedTrackKind}<span class="track-kind">{selectedTrackKind}</span>{/if}
+        </header>
         {#key activeProjectId}
           {#if selectedTrackKind === 'Audio'}
             <div class="track-view">
@@ -1105,9 +1129,41 @@
   /* MAIN CANVAS */
   .canvas {
     overflow: auto;
-    padding: var(--sp-4);
     background: var(--bg-1);
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .canvas-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4);
+    border-bottom: 1px solid var(--line-0);
+    background: var(--bg-2);
+    flex-shrink: 0;
+  }
+  .canvas-head .track-stripe {
+    width: 4px;
+    height: 18px;
+    border-radius: var(--r-sm);
+    flex-shrink: 0;
+  }
+  .canvas-head .track-name {
+    font-family: var(--font-sans);
+    font-size: var(--text-12);
+    color: var(--fg-0);
+    font-weight: 500;
+  }
+  .canvas-head .track-kind {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .canvas > :global(*:not(.canvas-head)) {
+    padding: var(--sp-4);
   }
   .synth-stack,
   .track-view {
