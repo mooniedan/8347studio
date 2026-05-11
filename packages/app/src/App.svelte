@@ -68,6 +68,7 @@
   import * as audio from './lib/audio';
   import { attachBridge, type Bridge } from './lib/engine-bridge';
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
+  import { parseManifest, type ParseResult } from './lib/plugin-manifest';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
   import * as assetStore from './lib/asset-store';
   import {
@@ -672,6 +673,9 @@
             if (!project) return null;
             return getMidiBinding(project, cc);
           },
+          /// Phase-8 M1 — schema validator backdoor. Pure function;
+          /// safe to expose. Used by tests/phase-8-manifest.spec.ts.
+          parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
           // Phase-5 M2: OPFS asset store + register_asset path.
           assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),
           assetStoreHas: (hash: string) => assetStore.has(hash),
