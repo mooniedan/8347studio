@@ -10,6 +10,7 @@ pub mod eq;
 pub mod gain;
 pub mod reverb;
 pub mod subtractive;
+pub mod wasm;
 
 use alloc::boxed::Box;
 

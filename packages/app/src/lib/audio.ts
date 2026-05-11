@@ -16,6 +16,11 @@ let ring: SharedArrayBuffer | null = null;
 let stepListener: ((step: number) => void) | null = null;
 let debugCounter = 0;
 const debugWaiters = new Map<number, (value: number) => void>();
+/// Phase-8 M3b: pending loadWasmPlugin requests by id → resolver.
+const wasmPluginWaiters = new Map<
+  number,
+  { resolve: (handle: number) => void; reject: (err: Error) => void }
+>();
 
 export type Waveform = 'sine' | 'saw' | 'square';
 const WAVEFORM_CODE: Record<Waveform, number> = { sine: 0, saw: 1, square: 2 };
@@ -46,6 +51,13 @@ export async function ensureReady(): Promise<{ node: AudioWorkletNode; ring: Sha
           if (cb) {
             debugWaiters.delete(data.id);
             cb(data.value);
+          }
+        } else if (data?.type === 'loadWasmPlugin-reply') {
+          const w = wasmPluginWaiters.get(data.id);
+          if (w) {
+            wasmPluginWaiters.delete(data.id);
+            if (data.error) w.reject(new Error(data.error));
+            else w.resolve(data.handle as number);
           }
         }
       };
@@ -134,6 +146,39 @@ export async function postRegisterAsset(
   // decoded cache wants to retain the PCM for re-renders).
   const copy = new Float32Array(pcm);
   node!.port.postMessage({ type: 'registerAsset', assetId, pcm: copy }, [copy.buffer]);
+}
+
+/// Phase-8 M3b: register a third-party WASM plugin with the worklet.
+/// The worklet instantiates the plugin in its own context and returns
+/// a handle the engine uses to address it across the host-imports.
+let nextWasmPluginRequestId = 1;
+export async function postLoadWasmPlugin(
+  bytes: Uint8Array,
+  opts: { maxBlockSize?: number; inChannels?: number; outChannels?: number } = {},
+): Promise<number> {
+  await ensureReady();
+  const id = nextWasmPluginRequestId++;
+  // Transfer the byte buffer to avoid copying it across the port.
+  const copy = new Uint8Array(bytes);
+  return new Promise<number>((resolve, reject) => {
+    wasmPluginWaiters.set(id, { resolve, reject });
+    node!.port.postMessage(
+      {
+        type: 'loadWasmPlugin',
+        id,
+        bytes: copy,
+        maxBlockSize: opts.maxBlockSize ?? 256,
+        inChannels: opts.inChannels ?? 0,
+        outChannels: opts.outChannels ?? 1,
+      },
+      [copy.buffer],
+    );
+  });
+}
+
+export async function postUnloadWasmPlugin(handle: number): Promise<void> {
+  await ensureReady();
+  node!.port.postMessage({ type: 'unloadWasmPlugin', handle });
 }
 
 /// Provide a fresh-context AudioContext for asset-store decoding —

@@ -70,7 +70,12 @@
     scaleCcToParam,
   } from './lib/plugin-descriptors';
   import * as audio from './lib/audio';
-  import { attachBridge, type Bridge } from './lib/engine-bridge';
+  import {
+    attachBridge,
+    attachWasmPluginToTrack,
+    detachWasmPluginFromTrack,
+    type Bridge,
+  } from './lib/engine-bridge';
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
   import { parseManifest, type ParseResult } from './lib/plugin-manifest';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
@@ -792,6 +797,36 @@
           /// Phase-8 M1 — schema validator backdoor. Pure function;
           /// safe to expose. Used by tests/phase-8-manifest.spec.ts.
           parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
+          /// Phase-8 M3b — load a third-party WASM plugin into the
+          /// worklet and return the handle. Used by the e2e test;
+          /// in production the picker UI (M5) will drive this with
+          /// fetched + integrity-verified bytes from a manifest.
+          loadWasmPlugin: async (
+            bytes: Uint8Array,
+            opts?: { maxBlockSize?: number; inChannels?: number; outChannels?: number },
+          ): Promise<number> => audio.postLoadWasmPlugin(bytes, opts),
+          unloadWasmPlugin: (handle: number) => audio.postUnloadWasmPlugin(handle),
+          /// Bind a worklet-assigned wasm handle to a track. The
+          /// engine-bridge picks it up on the next snapshot push and
+          /// the engine builds a WasmPlugin for that track.
+          attachWasmPluginToTrack: (
+            trackIdx: number,
+            handle: number,
+            isInstrument: boolean,
+          ) => {
+            if (!project) return;
+            if (trackIdx < 0 || trackIdx >= project.tracks.length) return;
+            const trackId = project.tracks.get(trackIdx);
+            attachWasmPluginToTrack(trackId, handle, isInstrument);
+            bridge?.rebuild();
+          },
+          detachWasmPluginFromTrack: (trackIdx: number) => {
+            if (!project) return;
+            if (trackIdx < 0 || trackIdx >= project.tracks.length) return;
+            const trackId = project.tracks.get(trackIdx);
+            detachWasmPluginFromTrack(trackId);
+            bridge?.rebuild();
+          },
           // Phase-5 M2: OPFS asset store + register_asset path.
           assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),
           assetStoreHas: (hash: string) => assetStore.has(hash),

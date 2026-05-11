@@ -166,6 +166,13 @@ pub enum InstrumentSnapshot {
     /// Phase-8 first-party drumkit — 5-voice TR-style drum machine.
     /// Same `(id, value)` param-snapshot shape as Subtractive.
     Drumkit { params: Vec<(u32, f32)> },
+    /// Phase-8 M3b — third-party WASM plugin. `handle` is assigned by
+    /// the audio worklet at plugin-load time; the engine passes it
+    /// back across host imports on every call so the worklet can
+    /// route to the right plugin instance.
+    /// `is_instrument` reflects the manifest's `kind` — true for
+    /// instrument plugins, false for effects loaded into the slot.
+    Wasm { handle: u32, is_instrument: bool, params: Vec<(u32, f32)> },
 }
 
 pub fn encode(snap: &ProjectSnapshot) -> Vec<u8> {

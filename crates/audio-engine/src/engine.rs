@@ -9,6 +9,7 @@ use crate::plugin::{Plugin, Silence};
 use crate::plugins::build_insert_plugin;
 use crate::plugins::drumkit::Drumkit;
 use crate::plugins::subtractive::Subtractive;
+use crate::plugins::wasm::{WasmPlugin, WasmPluginKind};
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
 use crate::snapshot::{InstrumentSnapshot, LoopRegion, ProjectSnapshot};
@@ -131,6 +132,17 @@ impl Engine {
                         {
                             for &(id, value) in params {
                                 d.set_param(id, value);
+                            }
+                        }
+                    }
+                    InstrumentSnapshot::Wasm { params, .. } => {
+                        if let Some(w) = track
+                            .instrument
+                            .as_any_mut()
+                            .downcast_mut::<WasmPlugin>()
+                        {
+                            for &(id, value) in params {
+                                w.set_param(id, value);
                             }
                         }
                     }
@@ -567,6 +579,15 @@ fn instrument_matches(track: &TrackEngine, instrument: &InstrumentSnapshot) -> b
         InstrumentSnapshot::None => any.is::<Silence>(),
         InstrumentSnapshot::Subtractive { .. } => any.is::<Subtractive>(),
         InstrumentSnapshot::Drumkit { .. } => any.is::<Drumkit>(),
+        InstrumentSnapshot::Wasm { handle, .. } => {
+            // Match only if it's a WasmPlugin AND the handle is the
+            // same — swapping plugins on a track has to rebuild.
+            if let Some(w) = any.downcast_ref::<WasmPlugin>() {
+                w.handle() == *handle
+            } else {
+                false
+            }
+        }
     }
 }
 
@@ -592,6 +613,18 @@ fn build_track(sample_rate: f32, ts: &crate::snapshot::TrackSnapshot) -> TrackEn
                 d.set_param(id, value);
             }
             Box::new(d)
+        }
+        InstrumentSnapshot::Wasm { handle, is_instrument, params } => {
+            let kind = if *is_instrument {
+                WasmPluginKind::Instrument
+            } else {
+                WasmPluginKind::Effect
+            };
+            let mut w = WasmPlugin::new(*handle, kind);
+            for &(id, value) in params {
+                w.set_param(id, value);
+            }
+            Box::new(w)
         }
     };
     let mut track = TrackEngine::new(instrument);

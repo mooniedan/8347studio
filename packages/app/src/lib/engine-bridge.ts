@@ -232,6 +232,31 @@ const INSTR_BUILTIN_SEQ = 0;
 const INSTR_NONE = 1;
 const INSTR_SUBTRACTIVE = 2;
 const INSTR_DRUMKIT = 3;
+const INSTR_WASM = 4;
+
+/// Phase-8 M3b — per-track wasm plugin runtime state. Handles are
+/// assigned by the audio worklet at plugin-load time; persisting them
+/// across reloads is M5 work (plugin registry + manifest cache).
+/// For now this is an in-memory side table keyed by track id; the
+/// snapshot encoder reads it to emit the Wasm instrument variant.
+interface WasmPluginAttachment {
+  handle: number;
+  isInstrument: boolean;
+}
+const wasmPluginAttachments = new Map<string, WasmPluginAttachment>();
+export function attachWasmPluginToTrack(
+  trackId: string,
+  handle: number,
+  isInstrument: boolean,
+): void {
+  wasmPluginAttachments.set(trackId, { handle, isInstrument });
+}
+export function detachWasmPluginFromTrack(trackId: string): void {
+  wasmPluginAttachments.delete(trackId);
+}
+export function getWasmPluginAttachment(trackId: string): WasmPluginAttachment | undefined {
+  return wasmPluginAttachments.get(trackId);
+}
 
 function encodeString(s: string): Uint8Array {
   const utf8 = new TextEncoder().encode(s);
@@ -244,7 +269,27 @@ function trackKindFromYjs(kind: unknown): number {
   return TK_MIDI;
 }
 
-function instrumentSnapshotBytes(track: Y.Map<unknown>): Uint8Array {
+function instrumentSnapshotBytes(track: Y.Map<unknown>, trackId: string): Uint8Array {
+  // Phase-8 M3b — a wasm plugin attached at runtime overrides any
+  // builtin instrument the Y.Doc currently advertises. The
+  // attachment table is in-memory only; reloads will re-load the
+  // plugin via the registry path (M5) and re-attach.
+  const wasmAttach = wasmPluginAttachments.get(trackId);
+  if (wasmAttach) {
+    const params: [number, number][] = [];
+    const parts: Uint8Array[] = [
+      new Uint8Array([INSTR_WASM]),
+      u32VarintToBytes(wasmAttach.handle),
+      new Uint8Array([wasmAttach.isInstrument ? 1 : 0]),
+      u32VarintToBytes(params.length),
+    ];
+    for (const [id, val] of params) {
+      parts.push(u32VarintToBytes(id));
+      parts.push(f32ToBytes(val));
+    }
+    return concat(parts);
+  }
+
   const kind = track.get('kind');
   if (kind !== 'MIDI') {
     return new Uint8Array([INSTR_NONE]);
@@ -603,7 +648,7 @@ export function buildSnapshot(project: Project): Uint8Array {
         f32ToBytes(pan),
         new Uint8Array([mute ? 1 : 0, solo ? 1 : 0]),
         u32VarintToBytes(voices),
-        instrumentSnapshotBytes(track),
+        instrumentSnapshotBytes(track, id),
         stepBytesForTrack(project, track),
         pianoRollBytesForTrack(project, track),
         insertBytesForTrack(track),
