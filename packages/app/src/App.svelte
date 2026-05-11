@@ -274,6 +274,22 @@
   let demoSaveAsOpen = $state(false);
   let demoSaveAsName = $state('My Beat');
 
+  /// Arm the dirty-watcher for the ephemeral demo: the next Y.Doc
+  /// update after this call flips `demoDirty = true`, which surfaces
+  /// the "Save as new project" banner. Callers wait until any
+  /// programmatic enrichment (e.g. demo-song wasm plugin load) has
+  /// finished writing to the doc — otherwise enrichment edits would
+  /// be mistaken for user edits.
+  function armDemoDirtyWatcher(): void {
+    if (!project) return;
+    const doc = project.doc;
+    const onUpdate = () => {
+      demoDirty = true;
+      doc.off('update', onUpdate);
+    };
+    doc.on('update', onUpdate);
+  }
+
   async function bootProject(docName: string, opts: { ephemeral?: boolean; seed?: 'demo' } = {}): Promise<void> {
     // Read the per-project seed hint and clear it so a refresh of the
     // same project doesn't re-seed (the Y.Doc already exists in IDB
@@ -286,32 +302,7 @@
     if (info?.id && info.seed) clearSeedHint(info.id);
     project = p;
 
-    // Watch for the first user edit on an ephemeral demo. Anything
-    // that arrives synchronously during boot is treated as part of
-    // the seed; the next microtask flips into user-edit mode.
     demoDirty = false;
-    if (opts.ephemeral) {
-      const doc = p.doc;
-      const armDirtyWatcher = () => {
-        const onUpdate = (_update: Uint8Array, origin: unknown) => {
-          // Seed runs inside `p.doc.transact(...)` with no explicit
-          // origin; mutations from the UI also have no origin. We
-          // arm the watcher after a microtask so any seed-time
-          // updates have already drained, and treat the next update
-          // as the first user edit.
-          void origin;
-          demoDirty = true;
-          doc.off('update', onUpdate);
-        };
-        doc.on('update', onUpdate);
-      };
-      // Two layers of "wait for the seed to settle":
-      //   1. microtask — the transact's commit phase
-      //   2. animation frame — any cascading observers (e.g.
-      //      engine-bridge writing meta.installedPlugins) that fire
-      //      shortly after attach
-      queueMicrotask(() => requestAnimationFrame(armDirtyWatcher));
-    }
     exposeDebugHandle(p);
     const { ring } = await audio.ensureReady();
     bridge = attachBridge(p, { ring, postRebuild: audio.postRebuild });
@@ -417,6 +408,13 @@
       // Use a stable docName so the read path (engine-bridge etc.)
       // has a name to log, but `ephemeral: true` keeps it off disk.
       await bootProject('__demo__', { ephemeral: true, seed: 'demo' });
+      // Phase-8 M6 — load the bitcrusher WASM plugin and attach it
+      // to the bass track. This grows the Demo Song to exercise the
+      // third-party plugin runtime audibly (commitment #7).
+      await enrichDemoSongWithBitcrusher();
+      // Arm only AFTER enrichment so its writes aren't mistaken for
+      // user edits by the "Save as new project" prompt.
+      armDemoDirtyWatcher();
       return;
     }
 
@@ -430,6 +428,39 @@
     inDemo = false;
     selectedTrackIdx = 0;
     await bootProject(next.docName);
+  }
+
+  /// Phase-8 M6 — load the Bitcrusher example plugin into the audio
+  /// worklet and attach it to the demo song's bass track as an
+  /// insert. Subtle settings (8-bit + 35% wet) so the demo gets a
+  /// little grit without losing the bass tone. Idempotent against
+  /// network failures: if the fetch or load throws, we log and move
+  /// on — the demo is still playable, just without the crusher.
+  async function enrichDemoSongWithBitcrusher(): Promise<void> {
+    if (!project) return;
+    try {
+      const resp = await fetch('/example-plugins/wasm_bitcrusher.wasm');
+      if (!resp.ok) return;
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      const handle = await audio.postLoadWasmPlugin(bytes, {
+        maxBlockSize: 256,
+        inChannels: 1,
+        outChannels: 1,
+      });
+      const bassIdx = 1; // demo seed layout: 0=Lead, 1=Bass, 2=Reverb, 3=Drums
+      addWasmInsert(project, bassIdx, handle);
+      const trackId = project.tracks.get(bassIdx);
+      const track = project.trackById.get(trackId);
+      const inserts = track?.get('inserts') as { length?: number } | undefined;
+      const slotIdx = (inserts?.length ?? 0) - 1;
+      if (slotIdx >= 0) {
+        setInsertParam(project, bassIdx, slotIdx, 0, 8);    // 8-bit (subtle)
+        setInsertParam(project, bassIdx, slotIdx, 1, 1);    // no SRR
+        setInsertParam(project, bassIdx, slotIdx, 2, 0.35); // 35% wet
+      }
+    } catch (err) {
+      console.warn('demo song bitcrusher enrichment failed:', err);
+    }
   }
 
   /// Fork the current ephemeral demo Y.Doc into a new persistent

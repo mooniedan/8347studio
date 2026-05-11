@@ -1223,7 +1223,8 @@ export type InsertPluginId =
   | 'builtin:compressor'
   | 'builtin:reverb'
   | 'builtin:delay'
-  | 'builtin:container';
+  | 'builtin:container'
+  | 'wasm';
 
 export interface InsertView {
   kind: InsertPluginId;
@@ -1238,6 +1239,7 @@ const INSERT_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'builtin:reverb',
   'builtin:delay',
   'builtin:container',
+  'wasm',
 ]);
 
 function trackInsertArr(p: Project, trackIdx: number): Y.Array<Y.Map<unknown>> | null {

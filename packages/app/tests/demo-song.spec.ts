@@ -138,6 +138,14 @@ test.describe('demo song', () => {
     expect(colors[3]).toBe('#5fc36b'); // Drums — green
     expect(new Set(colors).size).toBe(4);
 
+    // Phase-8 M6 — bitcrusher WASM plugin is attached to the bass
+    // track as an insert. The enrichment runs asynchronously after
+    // bootProject so poll until it lands.
+    await expect.poll(async () => {
+      const ts = await inspectTracks(page);
+      return ts[1]?.inserts.map((s) => s.kind) ?? [];
+    }).toContain('wasm');
+
     // Phase-8 M2 — drumkit track. Lives at idx 3, uses the drumkit
     // instrument, and has a piano-roll clip seeded with the kick /
     // snare / hat pattern. Hits land at GM drum-map pitches (36 / 38
