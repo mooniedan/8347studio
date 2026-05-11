@@ -4,7 +4,7 @@ dist/
 *.wasm
 .vite/
 .playwright-mcp/
-.claude/settings.local.json
+.claude/
 .obsidian/
 test-results/
 playwright-report/
