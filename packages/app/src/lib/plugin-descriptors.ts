@@ -156,6 +156,45 @@ export const CONTAINER_DESCRIPTORS: ParamDescriptor[] = [
   { id: 1, name: 'Branch 2 Gain', min: 0, max: 2, default: 1, unit: 'none', curve: 'linear', group: 'container' },
 ];
 
+// ---- Phase-8 M2: Drumkit (5-voice TR-style drum machine) -----------
+//
+// Stable param ids — mirror
+// crates/audio-engine/src/plugins/drumkit.rs constants. The mapping
+// is also re-exported from project.ts as DRUMKIT_PID_* for callers
+// that don't need the full descriptor table.
+
+export const DRUMKIT_PID = {
+  KICK_LEVEL: 0,
+  KICK_TUNE: 1,
+  KICK_DECAY: 2,
+  SNARE_LEVEL: 3,
+  SNARE_TUNE: 4,
+  SNARE_DECAY: 5,
+  CLAP_LEVEL: 6,
+  CLAP_DECAY: 7,
+  CHAT_LEVEL: 8,
+  CHAT_DECAY: 9,
+  OHAT_LEVEL: 10,
+  OHAT_DECAY: 11,
+  GAIN: 12,
+} as const;
+
+export const DRUMKIT_DESCRIPTORS: ParamDescriptor[] = [
+  { id: DRUMKIT_PID.KICK_LEVEL,  name: 'Kick Level',       min: 0,     max: 1,    default: 0.8,  unit: 'none',      curve: 'linear', group: 'kick' },
+  { id: DRUMKIT_PID.KICK_TUNE,   name: 'Kick Tune',        min: -12,   max: 12,   default: 0,    unit: 'semitones', curve: 'linear', group: 'kick' },
+  { id: DRUMKIT_PID.KICK_DECAY,  name: 'Kick Decay',       min: 0.01,  max: 1.5,  default: 0.30, unit: 'seconds',   curve: 'linear', group: 'kick' },
+  { id: DRUMKIT_PID.SNARE_LEVEL, name: 'Snare Level',      min: 0,     max: 1,    default: 0.8,  unit: 'none',      curve: 'linear', group: 'snare' },
+  { id: DRUMKIT_PID.SNARE_TUNE,  name: 'Snare Tune',       min: -12,   max: 12,   default: 0,    unit: 'semitones', curve: 'linear', group: 'snare' },
+  { id: DRUMKIT_PID.SNARE_DECAY, name: 'Snare Decay',      min: 0.01,  max: 1.5,  default: 0.18, unit: 'seconds',   curve: 'linear', group: 'snare' },
+  { id: DRUMKIT_PID.CLAP_LEVEL,  name: 'Clap Level',       min: 0,     max: 1,    default: 0.8,  unit: 'none',      curve: 'linear', group: 'clap' },
+  { id: DRUMKIT_PID.CLAP_DECAY,  name: 'Clap Decay',       min: 0.01,  max: 1.5,  default: 0.20, unit: 'seconds',   curve: 'linear', group: 'clap' },
+  { id: DRUMKIT_PID.CHAT_LEVEL,  name: 'Closed Hat Level', min: 0,     max: 1,    default: 0.8,  unit: 'none',      curve: 'linear', group: 'hat' },
+  { id: DRUMKIT_PID.CHAT_DECAY,  name: 'Closed Hat Decay', min: 0.01,  max: 1.5,  default: 0.05, unit: 'seconds',   curve: 'linear', group: 'hat' },
+  { id: DRUMKIT_PID.OHAT_LEVEL,  name: 'Open Hat Level',   min: 0,     max: 1,    default: 0.8,  unit: 'none',      curve: 'linear', group: 'hat' },
+  { id: DRUMKIT_PID.OHAT_DECAY,  name: 'Open Hat Decay',   min: 0.01,  max: 1.5,  default: 0.30, unit: 'seconds',   curve: 'linear', group: 'hat' },
+  { id: DRUMKIT_PID.GAIN,        name: 'Master Gain',      min: 0,     max: 1,    default: 0.8,  unit: 'none',      curve: 'linear', group: 'master' },
+];
+
 export const DELAY_DESCRIPTORS: ParamDescriptor[] = [
   { id: 0, name: 'Time',     min: 1,   max: 2000,  default: 250,  unit: 'ms',   curve: 'exp',    group: 'delay' },
   { id: 1, name: 'Feedback', min: 0,   max: 0.95,  default: 0.4,  unit: 'none', curve: 'linear', group: 'delay' },

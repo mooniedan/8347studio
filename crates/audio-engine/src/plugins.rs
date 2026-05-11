@@ -5,6 +5,7 @@
 pub mod compressor;
 pub mod container;
 pub mod delay;
+pub mod drumkit;
 pub mod eq;
 pub mod gain;
 pub mod reverb;

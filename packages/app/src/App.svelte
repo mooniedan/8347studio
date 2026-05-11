@@ -23,6 +23,7 @@
   import {
     createProject,
     addSubtractiveTrack,
+    addDrumkitTrack,
     addBusTrack,
     addAudioTrack,
     addAudioRegion,
@@ -829,6 +830,15 @@
         >+ Synth</button>
         <button
           class="tb"
+          data-testid="add-drumkit-track"
+          onclick={() => {
+            if (!project) return;
+            addDrumkitTrack(project);
+            selectedTrackIdx = project.tracks.length - 1;
+          }}
+        >+ Drums</button>
+        <button
+          class="tb"
           data-testid="add-bus-track"
           onclick={() => {
             if (!project) return;
@@ -954,7 +964,7 @@
               <InsertSlots {project} trackIdx={selectedTrackIdx} />
               <SendList {project} trackIdx={selectedTrackIdx} />
             </div>
-          {:else if selectedPluginId === 'builtin:subtractive'}
+          {:else if selectedPluginId === 'builtin:subtractive' || selectedPluginId === 'builtin:drumkit'}
             <div class="synth-stack">
               <PianoRoll {project} trackIdx={selectedTrackIdx} />
               <PluginPanel

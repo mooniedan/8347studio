@@ -268,13 +268,54 @@ function seedDemoSong(p: Project): void {
     // automation cycle in lock-step with it).
     setLoopRegion(p, { startTick: 0, endTick: progTicks });
 
-    // 11. Phase-7 M3 — semantic per-track color identity. Override
+    // 11. Phase-8 M2 — drum track. 4-bar pattern: kick on beats 1+3,
+    // snare on the backbeat (2+4), closed hi-hat 8th-note off-beats,
+    // one open-hat splash on the very last off-beat for a turnaround
+    // cue. Drumkit uses a PianoRoll clip — the existing ClipScheduler
+    // fires NoteOn at the drum-map pitches into the instrument.
+    const drumsId = addDrumkitTrack(p, 'Drums');
+    const drumsIdx = 3;
+    const drumsClip = getPianoRollClipForTrack(p, drumsIdx);
+    if (drumsClip) {
+      (drumsClip as Y.Map<unknown>).set('lengthTicks', PROG_STEPS * STEP_TICKS);
+      const drumHit = (pitch: number, step: number, vel: number) =>
+        addPianoRollNote(p, drumsClip, {
+          pitch,
+          velocity: vel,
+          startTick: step * STEP_TICKS,
+          lengthTicks: STEP_TICKS, // length is decorative; hits are one-shots
+        });
+      // Kick — 1+3 of each bar (8 hits over 4 bars).
+      for (let bar = 0; bar < 4; bar++) {
+        drumHit(DRUM_PITCH_KICK, bar * 16 + 0, 110);
+        drumHit(DRUM_PITCH_KICK, bar * 16 + 8, 110);
+      }
+      // Snare — backbeat (8 hits).
+      for (let bar = 0; bar < 4; bar++) {
+        drumHit(DRUM_PITCH_SNARE, bar * 16 + 4, 100);
+        drumHit(DRUM_PITCH_SNARE, bar * 16 + 12, 100);
+      }
+      // Closed hat — off-beat 8ths (steps 2, 6, 10, 14 of each bar).
+      // Skip the last off-beat of bar 4 to leave room for the open hat.
+      for (let bar = 0; bar < 4; bar++) {
+        for (const offBeat of [2, 6, 10, 14]) {
+          if (bar === 3 && offBeat === 14) continue;
+          drumHit(DRUM_PITCH_CHAT, bar * 16 + offBeat, 80);
+        }
+      }
+      // Open hat — final off-beat of bar 4 (step 62).
+      drumHit(DRUM_PITCH_OHAT, 3 * 16 + 14, 90);
+    }
+    setTrackGain(p, drumsIdx, 0.95);
+
+    // 12. Phase-7 M3 — semantic per-track color identity. Override
     // the default round-robin colors with palette entries that match
-    // each track's role (warm lead, deep bass, effect bus) so the
-    // user can see customizable color stripes at first glance.
+    // each track's role (warm lead, deep bass, effect bus, drums) so
+    // the user can see customizable color stripes at first glance.
     setTrackColor(p, leadIdx,      TRACK_PALETTE[1]); // orange
     setTrackColor(p, bassIdx,      TRACK_PALETTE[5]); // blue
     setTrackColor(p, reverbBusIdx, TRACK_PALETTE[6]); // purple
+    setTrackColor(p, drumsIdx,     TRACK_PALETTE[3]); // green
 
     // 12. Phase-3 M4 — a stored MIDI Learn binding for the lead's
     // filter cutoff (CC#74, the de-facto "cutoff" CC). Plug in any
@@ -292,6 +333,7 @@ function seedDemoSong(p: Project): void {
     void leadId;
     void bassTrackId;
     void reverbBusId;
+    void drumsId;
   });
 }
 
@@ -495,6 +537,69 @@ export function addSubtractiveTrack(p: Project): string {
   });
   return trackId;
 }
+
+/// Phase-8 M2 — add a drumkit track (5-voice synthesized drums).
+/// Uses a PianoRoll clip so the existing ClipScheduler dispatches
+/// NoteOn at drum-map pitches (36 kick / 38 snare / 39 clap / 42 chat
+/// / 46 ohat) into the instrument. Step-grid editing for drum tracks
+/// is a Phase-10 polish item.
+export function addDrumkitTrack(p: Project, name?: string): string {
+  let trackId = '';
+  p.doc.transact(() => {
+    const id = makeId('track');
+    const track = new Y.Map<unknown>();
+
+    const params = new Y.Map<unknown>();
+    const instr = new Y.Map<unknown>();
+    instr.set('pluginId', 'builtin:drumkit');
+    // Voice count is meaningless for one-shot drum voices, but keep
+    // the field present for snapshot compatibility.
+    instr.set('voices', 5);
+    instr.set('params', params);
+
+    const idx = p.tracks.length;
+    track.set('kind', 'MIDI');
+    track.set('name', name ?? `Drums ${idx + 1}`);
+    track.set('color', TRACK_PALETTE[idx % TRACK_PALETTE.length]);
+    track.set('mute', false);
+    track.set('solo', false);
+    track.set('gain', 1.0);
+    track.set('pan', 0);
+    track.set('instrumentSlot', instr);
+    track.set('inserts', new Y.Array());
+    track.set('sends', new Y.Array());
+    track.set('clips', new Y.Array<string>());
+
+    p.trackById.set(id, track);
+    p.tracks.push([id]);
+    createPianoRollClip(p, id);
+    trackId = id;
+  });
+  return trackId;
+}
+
+/// Drumkit param ids — mirror crates/audio-engine/src/plugins/drumkit.rs.
+/// Append-only.
+export const DRUMKIT_PID_KICK_LEVEL = 0;
+export const DRUMKIT_PID_KICK_TUNE = 1;
+export const DRUMKIT_PID_KICK_DECAY = 2;
+export const DRUMKIT_PID_SNARE_LEVEL = 3;
+export const DRUMKIT_PID_SNARE_TUNE = 4;
+export const DRUMKIT_PID_SNARE_DECAY = 5;
+export const DRUMKIT_PID_CLAP_LEVEL = 6;
+export const DRUMKIT_PID_CLAP_DECAY = 7;
+export const DRUMKIT_PID_CHAT_LEVEL = 8;
+export const DRUMKIT_PID_CHAT_DECAY = 9;
+export const DRUMKIT_PID_OHAT_LEVEL = 10;
+export const DRUMKIT_PID_OHAT_DECAY = 11;
+export const DRUMKIT_PID_GAIN = 12;
+
+/// Drum-map pitches — match crates/audio-engine/src/plugins/drumkit.rs.
+export const DRUM_PITCH_KICK = 36;
+export const DRUM_PITCH_SNARE = 38;
+export const DRUM_PITCH_CLAP = 39;
+export const DRUM_PITCH_CHAT = 42;
+export const DRUM_PITCH_OHAT = 46;
 
 function createPianoRollClip(p: Project, trackId: string): string {
   const clipId = makeId('clip');

@@ -7,6 +7,7 @@ import {
   COMPRESSOR_DESCRIPTORS,
   CONTAINER_DESCRIPTORS,
   DELAY_DESCRIPTORS,
+  DRUMKIT_DESCRIPTORS,
   EQ_DESCRIPTORS,
   GAIN_DESCRIPTORS,
   REVERB_DESCRIPTORS,
@@ -17,6 +18,7 @@ import {
 export type PluginId =
   | 'builtin:oscillator'
   | 'builtin:subtractive'
+  | 'builtin:drumkit'
   | 'builtin:gain'
   | 'builtin:eq'
   | 'builtin:compressor'
@@ -26,6 +28,7 @@ export type PluginId =
 
 const REGISTRY: Record<string, ParamDescriptor[]> = {
   'builtin:subtractive': SUBTRACTIVE_DESCRIPTORS,
+  'builtin:drumkit': DRUMKIT_DESCRIPTORS,
   'builtin:gain': GAIN_DESCRIPTORS,
   'builtin:eq': EQ_DESCRIPTORS,
   'builtin:compressor': COMPRESSOR_DESCRIPTORS,

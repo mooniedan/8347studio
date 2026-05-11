@@ -231,6 +231,7 @@ const TK_BUS = 2;
 const INSTR_BUILTIN_SEQ = 0;
 const INSTR_NONE = 1;
 const INSTR_SUBTRACTIVE = 2;
+const INSTR_DRUMKIT = 3;
 
 function encodeString(s: string): Uint8Array {
   const utf8 = new TextEncoder().encode(s);
@@ -253,7 +254,7 @@ function instrumentSnapshotBytes(track: Y.Map<unknown>): Uint8Array {
   const pluginId = instr.get('pluginId') as string | undefined;
   const params = instr.get('params') as Y.Map<unknown> | undefined;
 
-  if (pluginId === 'builtin:subtractive') {
+  if (pluginId === 'builtin:subtractive' || pluginId === 'builtin:drumkit') {
     const entries: [number, number][] = [];
     if (params) {
       params.forEach((v, k) => {
@@ -263,8 +264,9 @@ function instrumentSnapshotBytes(track: Y.Map<unknown>): Uint8Array {
         }
       });
     }
+    const tag = pluginId === 'builtin:drumkit' ? INSTR_DRUMKIT : INSTR_SUBTRACTIVE;
     const parts: Uint8Array[] = [
-      new Uint8Array([INSTR_SUBTRACTIVE]),
+      new Uint8Array([tag]),
       u32VarintToBytes(entries.length),
     ];
     for (const [id, val] of entries) {
@@ -811,10 +813,11 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
   // Seed the diff state so the first real edit produces an event.
   syncTrackParams();
 
-  // Synth param observers — one per subtractive track. Re-attach when
-  // tracks are added/removed/swapped so each observer captures the
-  // current track index. (Index can shift if earlier tracks are
-  // deleted; the observer resolves it lazily at fire time.)
+  // Synth param observers — one per param-bearing instrument track
+  // (Subtractive + Drumkit). Re-attach when tracks are added/removed/
+  // swapped so each observer captures the current track index. (Index
+  // can shift if earlier tracks are deleted; the observer resolves it
+  // lazily at fire time.)
   const synthOffs = new Map<string, () => void>();
   const reattachSynthObservers = () => {
     for (const off of synthOffs.values()) off();
@@ -824,8 +827,9 @@ export function attachBridge(project: Project, host: BridgeHost): Bridge {
       const t = project.trackById.get(trackId);
       if (!t || t.get('kind') !== 'MIDI') continue;
       const instr = t.get('instrumentSlot') as Y.Map<unknown> | undefined;
-      if (!instr || instr.get('pluginId') !== 'builtin:subtractive') continue;
-      const params = instr.get('params') as Y.Map<unknown> | undefined;
+      const pluginId = instr?.get('pluginId');
+      if (pluginId !== 'builtin:subtractive' && pluginId !== 'builtin:drumkit') continue;
+      const params = instr?.get('params') as Y.Map<unknown> | undefined;
       if (!params) continue;
       const handler = (ev: Y.YMapEvent<unknown>) => {
         const trackIdx = project.tracks.toArray().indexOf(trackId);

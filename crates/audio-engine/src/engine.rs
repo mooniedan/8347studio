@@ -7,6 +7,7 @@ use crate::snapshot::{AutoTarget, AutomationLane};
 use crate::oscillator::Waveform;
 use crate::plugin::{Plugin, Silence};
 use crate::plugins::build_insert_plugin;
+use crate::plugins::drumkit::Drumkit;
 use crate::plugins::subtractive::Subtractive;
 use crate::sab_ring::RingReader;
 use crate::sequencer::Sequencer;
@@ -119,6 +120,17 @@ impl Engine {
                         {
                             for &(id, value) in params {
                                 s.set_param(id, value);
+                            }
+                        }
+                    }
+                    InstrumentSnapshot::Drumkit { params } => {
+                        if let Some(d) = track
+                            .instrument
+                            .as_any_mut()
+                            .downcast_mut::<Drumkit>()
+                        {
+                            for &(id, value) in params {
+                                d.set_param(id, value);
                             }
                         }
                     }
@@ -554,6 +566,7 @@ fn instrument_matches(track: &TrackEngine, instrument: &InstrumentSnapshot) -> b
         InstrumentSnapshot::BuiltinSequencer { .. } => any.is::<Sequencer>(),
         InstrumentSnapshot::None => any.is::<Silence>(),
         InstrumentSnapshot::Subtractive { .. } => any.is::<Subtractive>(),
+        InstrumentSnapshot::Drumkit { .. } => any.is::<Drumkit>(),
     }
 }
 
@@ -572,6 +585,13 @@ fn build_track(sample_rate: f32, ts: &crate::snapshot::TrackSnapshot) -> TrackEn
                 s.set_param(id, value);
             }
             Box::new(s)
+        }
+        InstrumentSnapshot::Drumkit { params } => {
+            let mut d = Drumkit::new(sample_rate);
+            for &(id, value) in params {
+                d.set_param(id, value);
+            }
+            Box::new(d)
         }
     };
     let mut track = TrackEngine::new(instrument);

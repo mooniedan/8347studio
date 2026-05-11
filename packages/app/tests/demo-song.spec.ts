@@ -92,7 +92,7 @@ test.describe('demo song', () => {
 
     const shape = await projectShape(page);
     expect(shape.projectName).toBe('Demo Song');
-    expect(shape.trackCount).toBeGreaterThanOrEqual(3);
+    expect(shape.trackCount).toBeGreaterThanOrEqual(4);
 
     // Tempo set by the seeder.
     await expect.poll(() => bpm(page)).toBe(110);
@@ -129,13 +129,32 @@ test.describe('demo song', () => {
     expect(loop!.endTick).toBeGreaterThan(loop!.startTick);
 
     // Phase-7 M3 — per-track identity color. The seed overrides the
-    // default round-robin palette with semantic colors (warm lead,
-    // deep bass, effect bus); all three are distinct.
-    const colors = tracks.slice(0, 3).map((t) => t.color.toLowerCase());
+    // default round-robin palette with semantic colors; all four are
+    // distinct.
+    const colors = tracks.slice(0, 4).map((t) => t.color.toLowerCase());
     expect(colors[0]).toBe('#ff8a3d'); // Lead — orange
     expect(colors[1]).toBe('#4a9eff'); // Bass — blue
     expect(colors[2]).toBe('#a06bff'); // Reverb Bus — purple
-    expect(new Set(colors).size).toBe(3);
+    expect(colors[3]).toBe('#5fc36b'); // Drums — green
+    expect(new Set(colors).size).toBe(4);
+
+    // Phase-8 M2 — drumkit track. Lives at idx 3, uses the drumkit
+    // instrument, and has a piano-roll clip seeded with the kick /
+    // snare / hat pattern. Hits land at GM drum-map pitches (36 / 38
+    // / 42 / 46) so the demo audibly grooves without a bundled sample.
+    expect(tracks[3].name).toMatch(/drums/i);
+    const drumNotes = await page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: { getPianoRollNotes: (i: number) => { pitch: number }[] };
+      };
+      return w.__bridge.getPianoRollNotes(3);
+    });
+    expect(drumNotes.length).toBeGreaterThanOrEqual(30);
+    const pitches = new Set(drumNotes.map((n) => n.pitch));
+    expect(pitches).toContain(36); // kick
+    expect(pitches).toContain(38); // snare
+    expect(pitches).toContain(42); // closed hat
+    expect(pitches).toContain(46); // open hat
 
     // Phase-3 M4 — a stored MIDI Learn binding survives in the seed
     // so the demo demonstrates the workflow even without a hardware

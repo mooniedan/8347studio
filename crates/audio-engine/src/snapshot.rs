@@ -163,6 +163,9 @@ pub enum InstrumentSnapshot {
     /// rebuilds the patch deterministically from the snapshot. Empty
     /// vec = "use defaults".
     Subtractive { params: Vec<(u32, f32)> },
+    /// Phase-8 first-party drumkit — 5-voice TR-style drum machine.
+    /// Same `(id, value)` param-snapshot shape as Subtractive.
+    Drumkit { params: Vec<(u32, f32)> },
 }
 
 pub fn encode(snap: &ProjectSnapshot) -> Vec<u8> {
