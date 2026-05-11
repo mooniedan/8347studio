@@ -10,6 +10,9 @@
   import SendList from './lib/SendList.svelte';
   import AudioTrackView from './lib/AudioTrackView.svelte';
   import ProjectsMenu from './lib/ProjectsMenu.svelte';
+  import Inspector from './lib/Inspector.svelte';
+  import MixerDrawer from './lib/MixerDrawer.svelte';
+  import { createLayoutState } from './lib/layout-prefs.svelte';
   import {
     clearSeedHint,
     ensureDefaultProject,
@@ -75,6 +78,11 @@
   import { createPipController, isPipSupported, type PipController } from './lib/pip';
   import { createAudioRecorder, type AudioRecorder } from './lib/audio-recorder';
   import { encodeWavMono16 } from './lib/wav';
+
+  // Phase 7 M2 — per-machine layout prefs (pane widths + collapsed
+  // states). Persisted to LocalStorage; not in the Y.Doc because
+  // layout is screen-local, not project state.
+  const layout = createLayoutState();
 
   // Hydrate the Y.Doc from IndexedDB before mounting the Sequencer.
   // Avoids the race where a fresh UI writes defaults that overwrite a
@@ -412,6 +420,24 @@
     }
   }
 
+  // Phase 7 M2 — keyboard shortcuts. `Cmd/Ctrl+\` toggles the right
+  // inspector; `Cmd/Ctrl+M` toggles the bottom mixer drawer. Both are
+  // window-level so they work regardless of focus.
+  $effect(() => {
+    const onkey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === '\\') {
+        layout.inspectorCollapsed = !layout.inspectorCollapsed;
+        e.preventDefault();
+      } else if (e.key === 'm' || e.key === 'M') {
+        layout.drawerExpanded = !layout.drawerExpanded;
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onkey);
+    return () => window.removeEventListener('keydown', onkey);
+  });
+
   onDestroy(() => {
     pipController?.destroy();
     rootSyncHandle?.destroy();
@@ -720,288 +746,379 @@
   <p class="loading">loading…</p>
 {:then}
   {#if project && bridge}
-    <h1>8347 Studio</h1>
-    <div class="toolbar">
-      <ProjectsMenu
-        activeProjectId={activeProjectId}
-        onSwitch={(id) => void switchProject(id)}
-      />
-      <button
-        class="add-synth"
-        data-testid="add-synth-track"
-        onclick={() => {
-          if (!project) return;
-          addSubtractiveTrack(project);
-          selectedTrackIdx = project.tracks.length - 1;
-        }}
-      >+ Synth</button>
+    <div
+      class="app"
+      data-testid="app-frame"
+      style:--rail-w="{layout.railWidth}px"
+      style:--insp-w="{layout.inspectorCollapsed ? 24 : layout.inspectorWidth}px"
+    >
 
-      <button
-        class="add-synth"
-        data-testid="add-bus-track"
-        onclick={() => {
-          if (!project) return;
-          addBusTrack(project);
-          selectedTrackIdx = project.tracks.length - 1;
-        }}
-      >+ Bus</button>
+      <!-- TOP: 48px transport bar — brand, project menu, transport,
+           toolbar, MIDI state, PIP, collaborator-avatar slot
+           (placeholder for Phase 9 M4). -->
+      <header class="transport" data-testid="top-bar">
+        <div class="brand" aria-label="8347 Studio">
+          <span class="ts">8</span><span class="nm">3</span>
+          <span class="ts">4</span><span class="ts">7</span>
+          <span class="lbl">STUDIO</span>
+        </div>
 
-      <button
-        class="add-synth"
-        data-testid="add-audio-track"
-        onclick={() => {
-          if (!project) return;
-          addAudioTrack(project);
-          selectedTrackIdx = project.tracks.length - 1;
-        }}
-      >+ Audio</button>
+        <ProjectsMenu
+          activeProjectId={activeProjectId}
+          onSwitch={(id) => void switchProject(id)}
+        />
 
-      <button
-        class="add-synth"
-        data-testid="open-pip"
-        disabled={!pipSupported}
-        onclick={openPip}
-        title={pipSupported
-          ? 'Open transport in a Picture-in-Picture window'
-          : 'Document PIP not supported in this browser'}
-      >
-        ⌐ Transport
-      </button>
+        {#key activeProjectId}
+          <div class="transport-host"><Transport {project} /></div>
+        {/key}
 
-      <button
-        class="record"
-        class:recording
-        data-testid="record"
-        onclick={toggleRecord}
-        aria-pressed={recording}
-        title="Record live MIDI into the armed track's piano-roll clip"
-      >
-        <span class="record-dot"></span>
-        {recording ? 'Recording' : 'Record'}
-      </button>
+        <div class="spacer"></div>
 
-      <button
-        class="learn"
-        class:active={learnActive}
-        data-testid="midi-learn-toggle"
-        onclick={toggleLearn}
-        aria-pressed={learnActive}
-        title="Bind hardware CCs to plugin parameters"
-      >
-        {#if learnActive && learnPendingCC != null}
-          MIDI Learn — CC{learnPendingCC} → click a knob
-        {:else if learnActive}
-          MIDI Learn — wiggle a hardware knob
-        {:else}
-          MIDI Learn
-        {/if}
-      </button>
+        <button
+          class="tb"
+          data-testid="add-synth-track"
+          onclick={() => {
+            if (!project) return;
+            addSubtractiveTrack(project);
+            selectedTrackIdx = project.tracks.length - 1;
+          }}
+        >+ Synth</button>
+        <button
+          class="tb"
+          data-testid="add-bus-track"
+          onclick={() => {
+            if (!project) return;
+            addBusTrack(project);
+            selectedTrackIdx = project.tracks.length - 1;
+          }}
+        >+ Bus</button>
+        <button
+          class="tb"
+          data-testid="add-audio-track"
+          onclick={() => {
+            if (!project) return;
+            addAudioTrack(project);
+            selectedTrackIdx = project.tracks.length - 1;
+          }}
+        >+ Audio</button>
 
-      <div class="midi-chip" data-testid="midi-chip">
-        {#if midiStatus === 'unsupported'}
-          <span class="midi-state">MIDI: unsupported</span>
-        {:else if midiStatus === 'idle'}
-          <button class="enable-midi" data-testid="enable-midi" onclick={enableMidi}
-            >Enable MIDI</button
-          >
-        {:else if midiStatus === 'requesting'}
-          <span class="midi-state">MIDI: requesting…</span>
-        {:else if midiStatus === 'denied'}
-          <span class="midi-state">MIDI: denied</span>
-        {:else if midiDevices.length === 0}
-          <span class="midi-state" data-testid="midi-no-devices">MIDI: no devices</span>
-        {:else}
-          <label class="midi-device">
-            <span class="midi-state">MIDI</span>
-            <select
-              data-testid="midi-device"
-              value={selectedMidiId ?? '__all__'}
-              onchange={onSelectMidiDevice}
+        <button
+          class="tb record"
+          class:recording
+          data-testid="record"
+          onclick={toggleRecord}
+          aria-pressed={recording}
+          title="Record live MIDI into the armed track's piano-roll clip"
+        >
+          <span class="record-dot"></span>
+          {recording ? 'Recording' : 'Record'}
+        </button>
+
+        <button
+          class="tb learn"
+          class:active={learnActive}
+          data-testid="midi-learn-toggle"
+          onclick={toggleLearn}
+          aria-pressed={learnActive}
+          title="Bind hardware CCs to plugin parameters"
+        >
+          {#if learnActive && learnPendingCC != null}
+            CC{learnPendingCC} → pick
+          {:else if learnActive}
+            Learn — wiggle
+          {:else}
+            Learn
+          {/if}
+        </button>
+
+        <div class="midi-chip" data-testid="midi-chip">
+          {#if midiStatus === 'unsupported'}
+            <span class="midi-state">MIDI: unsupported</span>
+          {:else if midiStatus === 'idle'}
+            <button class="tb" data-testid="enable-midi" onclick={enableMidi}
+              >Enable MIDI</button
             >
-              <option value="__all__">All devices</option>
-              {#each midiDevices as d}
-                <option value={d.id}>{d.name}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-      </div>
-    </div>
-    {#key activeProjectId}
-    <Transport {project} />
-    <div class="layout">
-      <TrackList
-        {project}
-        selectedIdx={selectedTrackIdx}
-        onSelect={(i) => (selectedTrackIdx = i)}
+          {:else if midiStatus === 'requesting'}
+            <span class="midi-state">MIDI: requesting…</span>
+          {:else if midiStatus === 'denied'}
+            <span class="midi-state">MIDI: denied</span>
+          {:else if midiDevices.length === 0}
+            <span class="midi-state" data-testid="midi-no-devices">MIDI: no devices</span>
+          {:else}
+            <label class="midi-device">
+              <span class="midi-state">MIDI</span>
+              <select
+                data-testid="midi-device"
+                value={selectedMidiId ?? '__all__'}
+                onchange={onSelectMidiDevice}
+              >
+                <option value="__all__">All devices</option>
+                {#each midiDevices as d}
+                  <option value={d.id}>{d.name}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+        </div>
+
+        <!-- Collaborator-avatar slot (Phase 9 M4 populates this). -->
+        <div class="avatars" data-testid="collab-avatars" aria-hidden="true"></div>
+
+        <button
+          class="tb"
+          data-testid="open-pip"
+          disabled={!pipSupported}
+          onclick={openPip}
+          title={pipSupported
+            ? 'Open transport in a Picture-in-Picture window'
+            : 'Document PIP not supported in this browser'}
+        >⌐ PIP</button>
+      </header>
+
+      <!-- LEFT RAIL: track list. -->
+      <aside class="rail" data-testid="rail">
+        {#key activeProjectId}
+          <TrackList
+            {project}
+            selectedIdx={selectedTrackIdx}
+            onSelect={(i) => (selectedTrackIdx = i)}
+          />
+        {/key}
+      </aside>
+
+      <!-- MAIN CANVAS: the per-track editor (Sequencer / PianoRoll /
+           AudioTrackView, plus insert + send rows). -->
+      <main class="canvas" data-testid="canvas">
+        {#key activeProjectId}
+          {#if selectedTrackKind === 'Audio'}
+            <div class="track-view">
+              <AudioTrackView
+                {project}
+                trackIdx={selectedTrackIdx}
+                recording={audioRecordingTrackIdx === selectedTrackIdx}
+                onToggleRecord={() => toggleAudioRecord(selectedTrackIdx)}
+              />
+              <InsertSlots {project} trackIdx={selectedTrackIdx} />
+              <SendList {project} trackIdx={selectedTrackIdx} />
+            </div>
+          {:else if selectedPluginId === 'builtin:subtractive'}
+            <div class="synth-stack">
+              <PianoRoll {project} trackIdx={selectedTrackIdx} />
+              <PluginPanel
+                {project}
+                trackIdx={selectedTrackIdx}
+                learnActive={learnActive}
+                learnPendingCC={learnPendingCC}
+                onBindParam={bindPendingCC}
+                onUnbindCC={unbindCC}
+              />
+              <InsertSlots {project} trackIdx={selectedTrackIdx} />
+              <SendList {project} trackIdx={selectedTrackIdx} />
+            </div>
+          {:else}
+            <div class="track-view">
+              <Sequencer {project} trackIdx={selectedTrackIdx} />
+              <InsertSlots {project} trackIdx={selectedTrackIdx} />
+              <SendList {project} trackIdx={selectedTrackIdx} />
+            </div>
+          {/if}
+        {/key}
+      </main>
+
+      <!-- RIGHT INSPECTOR: collapsible. M2 empty stub; M4 populates. -->
+      <Inspector
+        bind:collapsed={layout.inspectorCollapsed}
+        width={layout.inspectorWidth}
       />
-      {#if selectedTrackKind === 'Audio'}
-        <div class="track-view">
-          <AudioTrackView
+
+      <!-- BOTTOM DRAWER: collapsible mixer. -->
+      <MixerDrawer
+        bind:expanded={layout.drawerExpanded}
+        height={layout.drawerHeight}
+      >
+        {#key activeProjectId}
+          <Mixer
             {project}
-            trackIdx={selectedTrackIdx}
-            recording={audioRecordingTrackIdx === selectedTrackIdx}
-            onToggleRecord={() => toggleAudioRecord(selectedTrackIdx)}
+            onPopout={() => {
+              window.open('?panel=mixer', 'mixer-popup', 'width=420,height=420');
+            }}
           />
-          <InsertSlots {project} trackIdx={selectedTrackIdx} />
-          <SendList {project} trackIdx={selectedTrackIdx} />
-        </div>
-      {:else if selectedPluginId === 'builtin:subtractive'}
-        <div class="synth-stack">
-          <PianoRoll {project} trackIdx={selectedTrackIdx} />
-          <PluginPanel
-            {project}
-            trackIdx={selectedTrackIdx}
-            learnActive={learnActive}
-            learnPendingCC={learnPendingCC}
-            onBindParam={bindPendingCC}
-            onUnbindCC={unbindCC}
-          />
-          <InsertSlots {project} trackIdx={selectedTrackIdx} />
-          <SendList {project} trackIdx={selectedTrackIdx} />
-        </div>
-      {:else}
-        <div class="track-view">
-          <Sequencer {project} trackIdx={selectedTrackIdx} />
-          <InsertSlots {project} trackIdx={selectedTrackIdx} />
-          <SendList {project} trackIdx={selectedTrackIdx} />
-        </div>
-      {/if}
+        {/key}
+      </MixerDrawer>
+
     </div>
-    <Mixer
-      {project}
-      onPopout={() => {
-        window.open('?panel=mixer', 'mixer-popup', 'width=420,height=420');
-      }}
-    />
-    {/key}
   {/if}
 {/await}
 
 <style>
-  :global(body) {
-    background: #0d0d0d;
-    color: #ddd;
-    margin: 0;
+  /* P1 grid: top transport (48px) → middle row (rail / canvas /
+     inspector) → bottom drawer (auto). The middle row stretches to
+     fill the viewport minus the transport and the drawer. */
+  .app {
+    display: grid;
+    grid-template-rows: 48px 1fr auto;
+    grid-template-columns: var(--rail-w) 1fr var(--insp-w);
+    height: 100vh;
+    min-height: 0;
+    background: var(--bg-1);
+    color: var(--fg-0);
+    font-size: var(--text-12);
   }
-  h1 {
-    font-family: system-ui, sans-serif;
+  .app > :global(.transport) {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .app > .rail     { grid-column: 1; grid-row: 2; }
+  .app > .canvas   { grid-column: 2; grid-row: 2; }
+  .app > :global(.inspector) { grid-column: 3; grid-row: 2; }
+  .app > :global(.drawer)    { grid-column: 1 / -1; grid-row: 3; }
+
+  /* TOP TRANSPORT BAR */
+  .transport {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 0 var(--sp-4);
+    background: linear-gradient(180deg, #15171b, #0d0e11);
+    border-bottom: 1px solid var(--line-2);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 1px;
+    font-family: var(--font-mono);
     font-size: 14px;
     font-weight: 600;
-    color: #ccc;
-    padding: 8px 16px;
-    margin: 0;
-    border-bottom: 1px solid #2a2a2a;
+    letter-spacing: 0.02em;
+    padding-right: var(--sp-3);
+    border-right: 1px solid var(--line-1);
+    margin-right: var(--sp-2);
   }
-  .layout {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 16px;
-    padding: 16px;
-  }
-  .synth-stack,
-  .track-view {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    border-bottom: 1px solid #1f1f1f;
+  .brand .ts { color: var(--accent); }
+  .brand .nm { color: var(--fg-0); }
+  .brand .lbl {
+    color: var(--fg-3);
+    font-size: 9px;
+    margin-left: 6px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
   }
 
-  .add-synth {
-    background: #1a1a1a;
-    color: #ddd;
-    border: 1px solid #2a2a2a;
+  .transport-host {
+    display: flex;
+    align-items: center;
+    /* Phase 7 M3 reskins Transport itself; M2 just hosts it. */
+  }
+
+  .spacer { flex: 1; min-width: 8px; }
+
+  .tb {
+    font-family: var(--font-sans);
+    font-size: var(--text-11);
+    background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+    color: var(--fg-1);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
     padding: 4px 10px;
-    font: 11px system-ui, sans-serif;
+    height: 26px;
     cursor: pointer;
-  }
-  .add-synth:hover {
-    background: #232323;
-  }
-  .record {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: #1a1a1a;
-    color: #ddd;
-    border: 1px solid #2a2a2a;
-    padding: 4px 10px;
-    font: 11px system-ui, sans-serif;
-    cursor: pointer;
+    box-shadow: var(--shadow-rim);
   }
-  .record:hover {
-    background: #232323;
+  .tb:hover {
+    background: linear-gradient(180deg, #2a2e36, var(--bg-3));
+    color: var(--fg-0);
   }
+  .tb:disabled { opacity: 0.45; cursor: not-allowed; }
+  .tb:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
   .record .record-dot {
     width: 8px;
     height: 8px;
-    background: #555;
+    background: var(--fg-3);
     border-radius: 50%;
   }
   .record.recording {
-    border-color: #ff3a3a;
-    color: #ff8585;
-    background: #2a0e0e;
+    border-color: var(--rec);
+    color: var(--rec-pulse);
+    background: rgba(226, 52, 45, 0.12);
   }
   .record.recording .record-dot {
-    background: #ff3a3a;
+    background: var(--rec-pulse);
     animation: rec-pulse 1s infinite;
   }
   @keyframes rec-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
   }
-  .learn {
-    background: #1a1a1a;
-    color: #ddd;
-    border: 1px solid #2a2a2a;
-    padding: 4px 10px;
-    font: 11px system-ui, sans-serif;
-    cursor: pointer;
-  }
-  .learn:hover {
-    background: #232323;
-  }
+
   .learn.active {
-    border-color: #4ad6ff;
-    color: #4ad6ff;
-    background: #0a1a22;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-tint);
   }
+
   .midi-chip {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #aaa;
-    font: 11px system-ui, sans-serif;
+    color: var(--fg-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-11);
   }
   .midi-chip select {
-    background: #222;
-    color: #ddd;
-    border: 1px solid #333;
+    background: var(--bg-0);
+    color: var(--fg-0);
+    border: 1px solid var(--line-1);
     padding: 2px 4px;
     font: inherit;
+    border-radius: var(--r-sm);
   }
-  .enable-midi {
-    background: #1a1a1a;
-    color: #ddd;
-    border: 1px solid #2a2a2a;
-    padding: 4px 10px;
-    font: inherit;
-    cursor: pointer;
+  .midi-state { color: var(--fg-2); }
+
+  .avatars {
+    /* placeholder for Phase 9 M4 collaborator avatars; reserves a
+       layout slot so M3 + tests can target it. */
+    min-width: 28px;
+    height: 24px;
+    border-left: 1px solid var(--line-1);
+    margin-left: var(--sp-2);
   }
-  .midi-state {
-    color: #888;
+
+  /* LEFT RAIL */
+  .rail {
+    background: var(--bg-2);
+    border-right: 1px solid var(--line-1);
+    overflow: auto;
+    min-width: 0;
   }
+
+  /* MAIN CANVAS */
+  .canvas {
+    overflow: auto;
+    padding: var(--sp-4);
+    background: var(--bg-1);
+    min-width: 0;
+  }
+  .synth-stack,
+  .track-view {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+  }
+
   .loading {
-    font-family: system-ui, sans-serif;
-    color: #888;
-    padding: 16px;
+    font-family: var(--font-sans);
+    color: var(--fg-2);
+    padding: var(--sp-5);
   }
 </style>
