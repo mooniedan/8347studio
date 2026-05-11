@@ -139,4 +139,37 @@ test.describe('phase-7 M2 — app frame', () => {
     await expect(page.getByTestId('add-bus-track')).toBeVisible();
     await expect(page.getByTestId('add-audio-track')).toBeVisible();
   });
+
+  test('ProjectsMenu dropdown escapes the transport bar (not clipped)', async ({ page }) => {
+    await gotoFresh(page);
+    // Open the dropdown.
+    await page.getByTestId('projects-menu').click();
+    const list = page.getByTestId('projects-menu-list');
+    await expect(list).toBeVisible();
+    // The dropdown body must extend below the transport bar (48px).
+    const bottom = await list.evaluate((el) =>
+      Math.round(el.getBoundingClientRect().bottom),
+    );
+    expect(bottom).toBeGreaterThan(48);
+    // And it must not be clipped by an ancestor — visibly reach the
+    // demo-song row.
+    await expect(page.getByTestId('projects-new-demo')).toBeVisible();
+  });
+
+  test('mixer drawer hides while the mixer popup is open', async ({ page, context }) => {
+    await gotoFresh(page);
+    await expect(page.getByTestId('drawer-body')).toBeVisible();
+    const [popup] = await Promise.all([
+      context.waitForEvent('page'),
+      page.locator('[data-testid="mixer-popout"]').click(),
+    ]);
+    // In-root drawer collapses to the "popped" status strip; the
+    // mixer body is no longer in the DOM.
+    await expect(page.getByTestId('mixer-drawer')).toHaveAttribute('data-popped', 'true');
+    await expect(page.getByTestId('drawer-body')).toHaveCount(0);
+
+    // Close the popup → drawer comes back.
+    await popup.close();
+    await expect(page.getByTestId('drawer-body')).toBeVisible({ timeout: 5_000 });
+  });
 });

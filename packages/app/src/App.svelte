@@ -88,6 +88,21 @@
   // layout is screen-local, not project state.
   const layout = createLayoutState();
 
+  // Phase 7 M2 follow-up — when the user pops the mixer into a
+  // satellite window, hide the in-root drawer so the same control
+  // doesn't appear twice. Poll `closed` so we can restore the drawer
+  // automatically when the user closes the popup.
+  let mixerPopup = $state<Window | null>(null);
+  $effect(() => {
+    if (!mixerPopup) return;
+    const id = setInterval(() => {
+      if (mixerPopup && mixerPopup.closed) {
+        mixerPopup = null;
+      }
+    }, 500);
+    return () => clearInterval(id);
+  });
+
   // Hydrate the Y.Doc from IndexedDB before mounting the Sequencer.
   // Avoids the race where a fresh UI writes defaults that overwrite a
   // just-restored doc.
@@ -997,16 +1012,30 @@
         selectedTrackIdx={selectedTrackIdx}
       />
 
-      <!-- BOTTOM DRAWER: collapsible mixer. -->
+      <!-- BOTTOM DRAWER: collapsible mixer. Hidden while the mixer
+           lives in a satellite popup window (prevents duplicate
+           controls). The drawer reappears when the popup closes. -->
       <MixerDrawer
         bind:expanded={layout.drawerExpanded}
         height={layout.drawerHeight}
+        popped={mixerPopup != null && !mixerPopup.closed}
       >
         {#key activeProjectId}
           <Mixer
             {project}
             onPopout={() => {
-              window.open('?panel=mixer', 'mixer-popup', 'width=420,height=420');
+              // If a popup is already open, just focus it instead of
+              // opening a second copy.
+              if (mixerPopup && !mixerPopup.closed) {
+                mixerPopup.focus();
+                return;
+              }
+              const w = window.open(
+                '?panel=mixer',
+                'mixer-popup',
+                'width=420,height=420',
+              );
+              mixerPopup = w;
             }}
           />
         {/key}
@@ -1048,9 +1077,16 @@
     background: linear-gradient(180deg, #15171b, #0d0e11);
     border-bottom: 1px solid var(--line-2);
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
-    overflow-x: auto;
-    overflow-y: hidden;
+    /* No overflow clipping — popovers like the ProjectsMenu dropdown
+       must be free to escape the 48px height. White-space:nowrap +
+       flex-shrink on individual items keeps everything on one row;
+       on truly narrow viewports content can spill rightward (better
+       than clipping a dropdown). */
     white-space: nowrap;
+    /* Sit above the grid below so absolute-positioned popovers from
+       toolbar items render on top of the canvas / inspector. */
+    position: relative;
+    z-index: 5;
   }
   .brand {
     display: flex;
