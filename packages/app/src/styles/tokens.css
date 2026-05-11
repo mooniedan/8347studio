@@ -1,0 +1,138 @@
+/* IBM Plex (self-hosted via @fontsource) — pulled into the bundle */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/ibm-plex-mono/700.css";
+
+/* ================================================================
+   8347 STUDIO — Design Tokens (P0)
+   Source: .claude/plans/designs/styles.css
+   ================================================================ */
+
+:root {
+  /* Backgrounds (darkest → surface) */
+  --bg-0: #07070a;
+  --bg-1: #0e0f12;
+  --bg-2: #16181c;
+  --bg-3: #20232a;
+
+  /* Foregrounds */
+  --fg-0: #f4f5f7;
+  --fg-1: #c8ccd4;
+  --fg-2: #7c8290;
+  --fg-3: #4a4f5a;
+
+  /* Hairlines & dividers */
+  --line-0: #1a1c21;
+  --line-1: #2a2d35;
+  --line-2: #383c46;
+
+  /* Accent (metallic red — "Beat in L33T" flag) */
+  --accent:      #e2342d;
+  --accent-hi:   #ff5a4f;
+  --accent-lo:   #8a1410;
+  --accent-tint: rgba(226, 52, 45, 0.12);
+  --accent-fg:   #ffffff;
+
+  /* Semantic / DAW state */
+  --rec:       #e2342d;
+  --rec-pulse: #ff4036;
+  --arm:       #ff8a3d;
+  --solo:      #ffd23d;
+  --mute:      #6a6f7c;
+  --play:      #ffffff;
+
+  /* Meters */
+  --meter-ok:   #5fc36b;
+  --meter-warn: #ffb13d;
+  --meter-clip: #e2342d;
+  --meter-bg:   #0a0b0d;
+
+  /* Type */
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --text-10: 10px;
+  --text-11: 11px;
+  --text-12: 12px;
+  --text-14: 14px;
+  --text-16: 16px;
+
+  /* Spacing */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 24px;
+
+  /* Radius */
+  --r-sm: 2px;
+  --r-md: 4px;
+  --r-lg: 6px;
+
+  /* Elevation */
+  --shadow-rim:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.6);
+  --shadow-pop:
+    0 1px 0 rgba(255, 255, 255, 0.04),
+    0 4px 14px rgba(0, 0, 0, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.8);
+  --shadow-inset:
+    inset 0 1px 2px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* 8-entry track palette (default = saturated). Phase 7 M3 reads
+   these via `var(--track-N)` keyed by track index. */
+:root,
+:root[data-track-palette="saturated"] {
+  --track-1: #e2342d;
+  --track-2: #ff8a3d;
+  --track-3: #ffd23d;
+  --track-4: #5fc36b;
+  --track-5: #3dc8c0;
+  --track-6: #4a9eff;
+  --track-7: #a06bff;
+  --track-8: #ff5fa8;
+}
+:root[data-track-palette="muted"] {
+  --track-1: #9a4540;
+  --track-2: #b07346;
+  --track-3: #b09640;
+  --track-4: #5b8a5f;
+  --track-5: #4a8a85;
+  --track-6: #4d6a96;
+  --track-7: #6e5a96;
+  --track-8: #96506e;
+}
+
+/* ================================================================
+   Base reset + typography
+   ================================================================ */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  font-size: var(--text-12);
+  line-height: 1.4;
+  font-feature-settings: "ss01", "cv01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mono { font-family: var(--font-mono); font-feature-settings: "zero", "ss02"; }
+.num  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+::selection { background: var(--accent-tint); color: var(--fg-0); }
