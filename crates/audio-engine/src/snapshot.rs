@@ -118,7 +118,7 @@ pub struct BranchSnapshot {
     pub inserts: Vec<InsertSnapshot>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InsertKind {
     /// First-party Gain — clean amplitude scaler. Phase-4 M1 fixture.
     Gain,
@@ -134,6 +134,10 @@ pub enum InsertKind {
     /// Phase-4 M5 escape hatch for parallel processing without a
     /// node-graph editor.
     Container,
+    /// Phase-8 M6 — third-party WASM plugin loaded as an insert.
+    /// `handle` is the worklet-assigned plugin instance the engine
+    /// passes back across the host_plugin_* imports on every call.
+    Wasm { handle: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

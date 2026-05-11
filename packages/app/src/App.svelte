@@ -29,6 +29,8 @@
     addDrumkitTrack,
     addBusTrack,
     addAudioTrack,
+    addWasmInsert,
+    setInsertParam,
     addAudioRegion,
     getAudioRegions,
     addInsert,
@@ -826,6 +828,27 @@
             const trackId = project.tracks.get(trackIdx);
             detachWasmPluginFromTrack(trackId);
             bridge?.rebuild();
+          },
+          /// Phase-8 M6 — attach a worklet-loaded WASM plugin to a
+          /// track as an insert (effect-chain slot). Returns the
+          /// new slot index. Tests use this to wire up a Bitcrusher
+          /// on a synth track without going through M5's picker UI.
+          addWasmInsert: (trackIdx: number, handle: number): number => {
+            if (!project) return -1;
+            addWasmInsert(project, trackIdx, handle);
+            const trackId = project.tracks.get(trackIdx);
+            const track = project.trackById.get(trackId);
+            const inserts = track?.get('inserts') as { length: number } | undefined;
+            return (inserts?.length ?? 0) - 1;
+          },
+          setInsertParam: (
+            trackIdx: number,
+            slotIdx: number,
+            paramId: number,
+            value: number,
+          ) => {
+            if (!project) return;
+            setInsertParam(project, trackIdx, slotIdx, paramId, value);
           },
           // Phase-5 M2: OPFS asset store + register_asset path.
           assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),

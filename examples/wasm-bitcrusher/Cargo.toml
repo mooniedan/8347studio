@@ -1,0 +1,12 @@
+[package]
+name = "wasm-bitcrusher"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "8347 Studio — example bitcrusher effect plugin (bit-depth + sample-rate reduction)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libm = "0.2"

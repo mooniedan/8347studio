@@ -365,6 +365,7 @@ const INSERT_COMPRESSOR = 2;
 const INSERT_REVERB = 3;
 const INSERT_DELAY = 4;
 const INSERT_CONTAINER = 5;
+const INSERT_WASM = 6;
 
 const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
   'builtin:gain': INSERT_GAIN,
@@ -373,6 +374,7 @@ const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
   'builtin:reverb': INSERT_REVERB,
   'builtin:delay': INSERT_DELAY,
   'builtin:container': INSERT_CONTAINER,
+  'wasm': INSERT_WASM,
 };
 
 /// Encode a single insert (and its branches if it's a Container).
@@ -382,6 +384,13 @@ function insertSnapshotBytes(slot: Y.Map<unknown>): Uint8Array | null {
   const pid = slot.get('pluginId') as string | undefined;
   if (!pid || !(pid in INSERT_KIND_BY_PLUGIN_ID)) return null;
   const kindByte = INSERT_KIND_BY_PLUGIN_ID[pid];
+  // Phase-8 M6 — wasm inserts skip the encoding if no handle is set;
+  // attachment hasn't completed (or got stale across reload). The
+  // engine treats the slot as absent.
+  if (pid === 'wasm') {
+    const handle = slot.get('wasmHandle') as number | undefined;
+    if (typeof handle !== 'number' || handle === 0) return null;
+  }
   const params = slot.get('params') as Y.Map<unknown> | undefined;
   const entries: [number, number][] = [];
   params?.forEach((v, k) => {
@@ -390,6 +399,13 @@ function insertSnapshotBytes(slot: Y.Map<unknown>): Uint8Array | null {
   });
   const parts: Uint8Array[] = [];
   parts.push(new Uint8Array([kindByte]));
+  // Wasm variant carries its handle as the first field of the
+  // enum, matching the Rust `InsertKind::Wasm { handle: u32 }`
+  // layout postcard expects.
+  if (pid === 'wasm') {
+    const handle = slot.get('wasmHandle') as number;
+    parts.push(u32VarintToBytes(handle));
+  }
   parts.push(u32VarintToBytes(entries.length));
   for (const [id, val] of entries) {
     parts.push(u32VarintToBytes(id));

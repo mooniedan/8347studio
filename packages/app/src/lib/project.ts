@@ -1292,6 +1292,25 @@ export function addInsert(p: Project, trackIdx: number, kind: InsertPluginId): v
   });
 }
 
+/// Phase-8 M6 — add a third-party WASM plugin as a track insert.
+/// `handle` is assigned by the worklet at plugin-load time (via
+/// `audio.postLoadWasmPlugin`); callers must register the plugin
+/// first, then pass the returned handle here. Stored alongside
+/// `pluginId='wasm'` so the engine-bridge encoder emits the
+/// `InsertKind::Wasm { handle }` snapshot variant.
+export function addWasmInsert(p: Project, trackIdx: number, handle: number): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr) return;
+  p.doc.transact(() => {
+    const slot = new Y.Map<unknown>();
+    slot.set('pluginId', 'wasm');
+    slot.set('wasmHandle', handle);
+    slot.set('bypass', false);
+    slot.set('params', new Y.Map<unknown>());
+    arr.push([slot]);
+  });
+}
+
 /// Add a sub-insert inside a Container slot's branch. Phase-4 M5.
 /// Errors silently when the addressed slot isn't a Container or the
 /// branch index is out of range.

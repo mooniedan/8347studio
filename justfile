@@ -11,8 +11,10 @@ build-wasm:
 # so the loader's Playwright spec can fetch it at `/example-plugins/…`.
 build-example-plugins:
     cargo build -p wasm-gain-plugin --target wasm32-unknown-unknown --release
+    cargo build -p wasm-bitcrusher --target wasm32-unknown-unknown --release
     mkdir -p {{example-plugins-out}}
     cp target/wasm32-unknown-unknown/release/wasm_gain_plugin.wasm {{example-plugins-out}}/
+    cp target/wasm32-unknown-unknown/release/wasm_bitcrusher.wasm {{example-plugins-out}}/
 
 dev: build-wasm build-example-plugins
     cd packages/app && pnpm dev

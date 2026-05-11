@@ -15,6 +15,7 @@ pub mod wasm;
 use alloc::boxed::Box;
 
 use crate::plugin::Plugin;
+use crate::plugins::wasm::{WasmPlugin, WasmPluginKind};
 use crate::snapshot::{InsertKind, InsertSnapshot};
 
 /// Build a freshly-instantiated plugin for the given insert snapshot
@@ -22,7 +23,7 @@ use crate::snapshot::{InsertKind, InsertSnapshot};
 /// to construct each branch's chain — the recursion is bounded by
 /// snapshot depth.
 pub fn build_insert_plugin(sample_rate: f32, ins: &InsertSnapshot) -> Box<dyn Plugin> {
-    let mut plugin: Box<dyn Plugin> = match ins.kind {
+    let mut plugin: Box<dyn Plugin> = match &ins.kind {
         InsertKind::Gain => Box::new(gain::Gain::new()),
         InsertKind::Eq => Box::new(eq::Eq::new(sample_rate)),
         InsertKind::Compressor => Box::new(compressor::Compressor::new(sample_rate)),
@@ -32,6 +33,7 @@ pub fn build_insert_plugin(sample_rate: f32, ins: &InsertSnapshot) -> Box<dyn Pl
             sample_rate,
             &ins.branches,
         )),
+        InsertKind::Wasm { handle } => Box::new(WasmPlugin::new(*handle, WasmPluginKind::Effect)),
     };
     for &(id, value) in &ins.params {
         plugin.set_param(id, value);
