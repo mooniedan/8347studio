@@ -13,6 +13,13 @@
   import Inspector from './lib/Inspector.svelte';
   import MixerDrawer from './lib/MixerDrawer.svelte';
   import MasterMeter from './lib/MasterMeter.svelte';
+  import PluginPicker, { type InstalledPlugin } from './lib/PluginPicker.svelte';
+  import { parseManifestJson } from './lib/plugin-manifest';
+  import { sha256 as wasmSha256 } from './lib/plugin-loader';
+  // Phase-8 M5: the picker installs via the worklet (canonical owner
+  // of the plugin WebAssembly.Instance), NOT via the M3a JS-side
+  // loadPlugin helper — that was a one-shot for the loader spec.
+  // We re-use the manifest validator + the SRI hashing utility.
   import { createLayoutState } from './lib/layout-prefs.svelte';
   import {
     clearSeedHint,
@@ -97,6 +104,63 @@
   // states). Persisted to LocalStorage; not in the Y.Doc because
   // layout is screen-local, not project state.
   const layout = createLayoutState();
+
+  // Phase 8 M5 — third-party plugin picker. Installed list is
+  // session-only for now (Y.Doc persistence + boot re-registration
+  // is the natural M5 follow-up but adds handle-remapping that's
+  // orthogonal to the picker UX itself).
+  let pickerOpen = $state(false);
+  let installedPlugins = $state<InstalledPlugin[]>([]);
+
+  async function installPluginFromUrl(url: string): Promise<string | undefined> {
+    try {
+      const manifestResp = await fetch(url);
+      if (!manifestResp.ok) return `fetch failed: ${manifestResp.status}`;
+      const text = await manifestResp.text();
+      const parsed = parseManifestJson(text);
+      if (!parsed.ok) {
+        const head = parsed.issues[0];
+        return `invalid manifest at ${head.path || '<root>'}: ${head.message}`;
+      }
+      const manifest = parsed.manifest;
+      // Refuse duplicates by id — clicking install twice for the
+      // same plugin no-ops with a friendly note.
+      if (installedPlugins.some((p) => p.manifest.id === manifest.id)) {
+        return `already installed: ${manifest.id}`;
+      }
+      // Resolve relative wasm URL against the manifest URL so
+      // manifests served from a CDN can reference assets sitting
+      // alongside them.
+      const wasmAbs = new URL(manifest.wasm, new URL(url, window.location.href)).toString();
+      const wasmResp = await fetch(wasmAbs);
+      if (!wasmResp.ok) return `wasm fetch failed: ${wasmResp.status}`;
+      const wasmBytes = new Uint8Array(await wasmResp.arrayBuffer());
+      const got = `sha256-${await wasmSha256(wasmBytes)}`;
+      if (got !== manifest.wasmIntegrity) {
+        return `integrity mismatch: manifest says ${manifest.wasmIntegrity}, wasm hashed to ${got}`;
+      }
+      // Register with the worklet — instrument vs effect determines
+      // whether the engine accepts it in the instrument slot vs an
+      // insert chain. The picker treats inputs/outputs symmetrically
+      // for now; per-kind defaults can come from manifest.kind.
+      const handle = await audio.postLoadWasmPlugin(wasmBytes, {
+        maxBlockSize: 256,
+        inChannels: manifest.kind === 'instrument' ? 0 : 1,
+        outChannels: 1,
+      });
+      installedPlugins = [...installedPlugins, { manifest, handle }];
+      return undefined;
+    } catch (err) {
+      return `install error: ${(err as Error).message}`;
+    }
+  }
+
+  function addInstalledPluginToSelectedTrack(plugin: InstalledPlugin): void {
+    if (!project) return;
+    if (selectedTrackIdx < 0 || selectedTrackIdx >= project.tracks.length) return;
+    addWasmInsert(project, selectedTrackIdx, plugin.handle);
+    pickerOpen = false;
+  }
 
   // Phase 7 M2 follow-up — when the user pops the mixer into a
   // satellite window, hide the in-root drawer so the same control
@@ -1061,6 +1125,13 @@
         >+ Audio</button>
 
         <button
+          class="tb"
+          data-testid="open-plugin-picker"
+          onclick={() => (pickerOpen = true)}
+          title="Browse + install third-party plugins"
+        >+ Plugin</button>
+
+        <button
           class="tb record"
           class:recording
           data-testid="record"
@@ -1275,6 +1346,15 @@
         {/key}
       </MixerDrawer>
 
+      <!-- Phase 8 M5 — plugin picker modal. Lives outside the
+           grid so its <dialog> backdrop covers everything. -->
+      <PluginPicker
+        bind:open={pickerOpen}
+        installed={installedPlugins}
+        selectedTrackName={selectedTrackNameValue || 'track'}
+        onInstall={installPluginFromUrl}
+        onAddToTrack={addInstalledPluginToSelectedTrack}
+      />
     </div>
   {/if}
 {/await}
