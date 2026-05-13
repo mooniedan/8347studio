@@ -63,14 +63,27 @@
   });
 
   let notes = $state<PianoRollNote[]>(untrack(() => snapshotNotes()));
-  // Column index (0..STEPS_PER_CLIP-1) currently under the playhead,
-  // computed from the engine's current_tick mod the visible bar.
-  // -1 = transport stopped / not playing.
+  // Clip-tick length — the visible grid scales to match. Falls back
+  // to one bar for clips without an explicit length so the default
+  // melodic editor stays its familiar 16-column form. Synced via
+  // the same clip observer as `notes` (in the $effect below).
+  // svelte-ignore state_referenced_locally
+  let clipLengthTicks = $state(untrack(() => snapshotClipLength()));
+  /// Visible column count derived from the clip length.
+  const cols = $derived(Math.max(1, Math.round(clipLengthTicks / STEP_TICKS)));
+  // Column index currently under the playhead; -1 = stopped.
   let playheadCol = $state(-1);
 
   function snapshotNotes(): PianoRollNote[] {
     const clip = getPianoRollClipForTrack(project, trackIdx);
     return clip ? readPianoRollNotes(clip) : [];
+  }
+
+  function snapshotClipLength(): number {
+    const clip = getPianoRollClipForTrack(project, trackIdx);
+    const raw = clip?.get('lengthTicks');
+    if (typeof raw === 'number' && raw > 0) return raw;
+    return STEPS_PER_CLIP * STEP_TICKS;
   }
 
   function noteAt(col: number, midi: number): PianoRollNote | null {
@@ -99,11 +112,14 @@
     const clip = getPianoRollClipForTrack(project, idx);
     if (!clip) {
       notes = [];
+      clipLengthTicks = STEPS_PER_CLIP * STEP_TICKS;
       return;
     }
     notes = readPianoRollNotes(clip);
+    clipLengthTicks = snapshotClipLength();
     const onChange = () => {
       notes = readPianoRollNotes(clip);
+      clipLengthTicks = snapshotClipLength();
     };
     clip.observeDeep(onChange);
     return () => {
@@ -112,18 +128,20 @@
   });
 
   // Drive the column-highlight playhead from engine current_tick.
-  // The grid shows STEPS_PER_CLIP columns of one bar; map any tick
-  // to that bar via `mod (STEPS_PER_CLIP × STEP_TICKS)`. The poll
-  // is animation-frame paced and only runs while playing.
+  // The grid scales to the clip's `lengthTicks`; the playhead
+  // column wraps through that range so notes outside the
+  // legacy 1-bar window stay reachable for multi-bar clips.
   $effect(() => {
-    const BAR_TICKS = STEPS_PER_CLIP * STEP_TICKS;
     let cancelled = false;
     let raf = 0;
     const tick = async () => {
       if (cancelled) return;
       const t = await audio.debugRead('currentTick');
-      // current_tick freezes at 0 when stopped; treat that as no playhead.
-      playheadCol = t > 0 ? Math.floor((t % BAR_TICKS) / STEP_TICKS) : -1;
+      const clipTicks = clipLengthTicks;
+      playheadCol =
+        t > 0 && clipTicks > 0
+          ? Math.floor((t % clipTicks) / STEP_TICKS)
+          : -1;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -144,10 +162,13 @@
     <div
       class="grid"
       data-testid={`piano-grid-${trackIdx}`}
-      style="grid-template-rows: repeat({rowDefs.length}, 1fr); grid-template-columns: repeat({STEPS_PER_CLIP}, 1fr);"
+      style="
+        grid-template-rows: repeat({rowDefs.length}, var(--row-h));
+        grid-template-columns: repeat({cols}, var(--col-w));
+      "
     >
       {#each rowDefs as row, r (row.midi)}
-        {#each Array(STEPS_PER_CLIP) as _, c}
+        {#each Array(cols) as _, c}
           <button
             class="cell"
             class:black-row={row.isAccent}
@@ -172,16 +193,15 @@
   }
   .roll {
     display: grid;
-    grid-template-columns: 32px 1fr;
+    grid-template-columns: 32px auto;
     gap: 4px;
+    overflow-x: auto;
+    max-width: 100%;
   }
   /* Drum view needs more room for "Closed Hat" / "Open Hat" labels
      and benefits from taller rows since there's only 5 of them. */
   .drum-roll .roll {
     grid-template-columns: 80px 1fr;
-  }
-  .drum-roll .grid {
-    aspect-ratio: 16 / 5;
   }
   .drum-roll .key {
     font-size: 10px;
@@ -211,11 +231,19 @@
     color: #aaa;
   }
   .grid {
+    /* Phase-8 follow-up — cells are sized explicitly so the grid
+       scales horizontally with the clip length without crushing
+       vertically. Outer `.roll` scrolls if content exceeds the
+       canvas width. */
+    --row-h: 22px;
+    --col-w: 36px;
     display: grid;
-    width: 640px;
-    aspect-ratio: 16 / 25;
     background: #222;
     border: 1px solid #333;
+  }
+  .drum-roll .grid {
+    --row-h: 32px;
+    --col-w: 28px;
   }
   .cell {
     appearance: none;

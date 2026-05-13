@@ -96,4 +96,29 @@ test.describe('phase-8 M2 — drumkit plugin', () => {
     );
     expect(notes.some((n: { pitch: number }) => n.pitch === 36)).toBe(true);
   });
+
+  test('piano-roll grid scales to the clip length (demo lead = 4 bars)', async ({ page }) => {
+    // Phase-8 follow-up — the visible grid width was hardcoded to 16
+    // steps before. The demo's lead clip is 4 bars (64 steps); the
+    // grid should now show all 64 columns so user clicks land at the
+    // tick they aim at.
+    await page.goto('/');
+    await (page as Page).waitForFunction(() => (window as any).__bridge != null);
+
+    await page.click('[data-testid="projects-menu"]');
+    await page.click('[data-testid="projects-new-demo"]');
+    await expect.poll(() => page.evaluate(() =>
+      (window as any).__project?.projectName ?? null
+    )).toBe('Demo Song');
+
+    // Track 0 is the lead with the 4-bar chord progression.
+    await page.click('[data-testid="track-row-0"]');
+    // Cells at column 63 (last step of bar 4) exist only when the
+    // grid scales — at the old 16-col size they would have been
+    // off-screen / unrendered.
+    await expect(page.locator('[data-testid="piano-cell-60-31"]')).toBeAttached();
+    await expect(page.locator('[data-testid="piano-cell-60-63"]')).toBeAttached();
+    // And a column past the actual clip length isn't rendered.
+    await expect(page.locator('[data-testid="piano-cell-60-100"]')).toHaveCount(0);
+  });
 });
