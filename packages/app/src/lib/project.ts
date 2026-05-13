@@ -85,9 +85,36 @@ export async function createProject(opts: CreateProjectOptions = {}): Promise<Pr
     } else {
       seedDefaults(project);
     }
+  } else {
+    // Project loaded from IndexedDB. Projects created before the
+    // default-loop seed shipped have no loop region; without one
+    // the engine runs the timeline once and silences forever, even
+    // though the per-clip playhead visually wraps. Fit a loop to
+    // the longest clip's end so the user's existing patterns
+    // actually loop.
+    healMissingLoopRegion(project);
   }
 
   return project;
+}
+
+function healMissingLoopRegion(p: Project): void {
+  if (getLoopRegion(p) != null) return;
+  // Find the longest clip end across all clips (piano-roll or
+  // step-seq). Fall back to a 4-bar loop if the project is empty.
+  let maxEnd = 0;
+  p.clipById.forEach((clip) => {
+    const start = (clip.get('startTick') as number | undefined) ?? 0;
+    const length = (clip.get('lengthTicks') as number | undefined) ?? 0;
+    const end = start + length;
+    if (end > maxEnd) maxEnd = end;
+  });
+  const barTicks = STEPS_PER_CLIP * STEP_TICKS;
+  // Round up to the next whole bar so the loop falls on a musical
+  // boundary; minimum 4 bars so freshly-empty existing projects get
+  // the same default new ones do.
+  const bars = Math.max(DEFAULT_LOOP_BARS, Math.ceil(maxEnd / barTicks));
+  setLoopRegion(p, { startTick: 0, endTick: bars * barTicks });
 }
 
 /// Build the Project shape on top of an existing Y.Doc. Phase-6 M4
