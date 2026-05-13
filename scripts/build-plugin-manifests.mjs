@@ -62,3 +62,14 @@ emit(
   },
   'wasm_bitcrusher.json',
 );
+
+// Phase-8 M7 — curated registry the picker fetches on open. Just a
+// flat list of manifest URLs (relative to the registry itself). For
+// real registries this would be a stable URL on a CDN; here it sits
+// alongside the example manifests for the e2e test fixture.
+emit(
+  {
+    plugins: ['./wasm_bitcrusher.json', './wasm_gain_plugin.json'],
+  },
+  'registry.json',
+);

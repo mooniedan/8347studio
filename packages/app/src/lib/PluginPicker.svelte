@@ -1,16 +1,25 @@
 <script lang="ts">
   /**
-   * Phase 8 M5 — third-party plugin picker. Modal dialog with two
-   * tabs (Installed grid + Browse / Install from URL) matching the
-   * P9 design. The picker is purely UI; install + add-to-track are
-   * delegated to callbacks the parent owns so the picker doesn't
-   * have to know about Y.Doc, loader, or worklet state.
+   * Phase 8 M5/M7 — third-party plugin picker. Modal dialog with
+   * two tabs (Installed grid + Browse) matching the P9 design.
+   * Browse fetches a curated registry of manifest URLs and renders
+   * each as an installable card (M7); paste-your-own-URL still
+   * works at the bottom (M5).
+   *
+   * The picker is purely UI; install + add-to-track are delegated
+   * to callbacks the parent owns so the picker doesn't have to know
+   * about Y.Doc, loader, or worklet state.
    */
   import { onMount } from 'svelte';
-  import type { PluginManifest } from './plugin-manifest';
+  import { parseManifestJson, type PluginManifest } from './plugin-manifest';
   import Button from './ui/Button.svelte';
   import IconButton from './ui/IconButton.svelte';
   import SegmentedControl from './ui/SegmentedControl.svelte';
+
+  /// Default curated registry — fetched the first time the Browse
+  /// tab is opened. Users can paste their own URL in the input
+  /// below to redirect to another registry.
+  const DEFAULT_REGISTRY_URL = '/example-plugins/registry.json';
 
   export interface InstalledPlugin {
     manifest: PluginManifest;
@@ -45,6 +54,94 @@
   let urlInput = $state('');
   let installing = $state(false);
   let installError = $state<string | undefined>(undefined);
+
+  /// Phase-8 M7 — fetched registry. Each entry carries the manifest
+  /// URL we'll install from + the manifest itself (so cards show
+  /// name/version/license without a second click).
+  interface RegistryEntry {
+    manifestUrl: string;
+    manifest: PluginManifest;
+  }
+  let registryEntries = $state<RegistryEntry[]>([]);
+  let registryLoading = $state(false);
+  let registryError = $state<string | undefined>(undefined);
+  let registryLoaded = false;
+
+  async function loadRegistry(force = false) {
+    if ((registryLoaded && !force) || registryLoading) return;
+    registryLoading = true;
+    registryError = undefined;
+    try {
+      const resp = await fetch(DEFAULT_REGISTRY_URL);
+      if (!resp.ok) throw new Error(`registry fetch failed: ${resp.status}`);
+      const body = (await resp.json()) as { plugins?: unknown };
+      const urls = Array.isArray(body.plugins) ? body.plugins.filter((u): u is string => typeof u === 'string') : [];
+      const base = new URL(DEFAULT_REGISTRY_URL, window.location.href);
+      const fetched = await Promise.all(
+        urls.map(async (rel) => {
+          const manifestUrl = new URL(rel, base).toString();
+          try {
+            const mResp = await fetch(manifestUrl);
+            if (!mResp.ok) throw new Error(`fetch ${mResp.status}`);
+            const parsed = parseManifestJson(await mResp.text());
+            if (!parsed.ok) throw new Error(parsed.issues[0]?.message ?? 'invalid manifest');
+            return { manifestUrl, manifest: parsed.manifest } as RegistryEntry;
+          } catch (err) {
+            // Surface the bad entry so it's visible in the UI but
+            // don't take down the whole registry.
+            return {
+              manifestUrl,
+              manifest: {
+                id: manifestUrl,
+                name: manifestUrl.split('/').pop() ?? manifestUrl,
+                version: '?',
+                kind: 'effect',
+                wasm: '',
+                wasmIntegrity: '',
+                params: [],
+              } as PluginManifest,
+              _error: (err as Error).message,
+            } as RegistryEntry & { _error: string };
+          }
+        }),
+      );
+      registryEntries = fetched;
+      registryLoaded = true;
+    } catch (err) {
+      registryError = (err as Error).message;
+    } finally {
+      registryLoading = false;
+    }
+  }
+
+  // Lazy-load the registry when the Browse tab is opened for the
+  // first time per dialog session.
+  $effect(() => {
+    if (tab === 'browse' && !registryLoaded && !registryLoading) {
+      void loadRegistry();
+    }
+  });
+
+  /// Has this registry entry already been installed?
+  function isInstalled(entry: RegistryEntry): boolean {
+    return installed.some((p) => p.manifest.id === entry.manifest.id);
+  }
+
+  async function installFromRegistry(entry: RegistryEntry) {
+    if (installing) return;
+    installing = true;
+    installError = undefined;
+    try {
+      const err = await onInstall(entry.manifestUrl);
+      if (err) {
+        installError = `${entry.manifest.name}: ${err}`;
+      } else {
+        tab = 'installed';
+      }
+    } finally {
+      installing = false;
+    }
+  }
 
   let dialogEl: HTMLDialogElement;
 
@@ -177,33 +274,97 @@
         </div>
       {/if}
     {:else}
-      <div class="install-form">
-        <label class="lbl" for="manifest-url">Plugin manifest URL</label>
-        <input
-          id="manifest-url"
-          type="url"
-          placeholder="https://example.com/plugin.json"
-          bind:value={urlInput}
-          disabled={installing}
-          onkeydown={(e) => { if (e.key === 'Enter') void handleInstall(); }}
-          data-testid="plugin-url-input"
-        />
-        <Button
-          variant="primary"
-          disabled={installing || urlInput.trim().length === 0}
-          testId="plugin-install"
-          onclick={() => void handleInstall()}
-        >{installing ? 'Installing…' : 'Install'}</Button>
-      </div>
-      {#if installError}
-        <p class="error" data-testid="plugin-install-error">{installError}</p>
-      {/if}
-      <p class="hint">
-        The picker fetches the manifest JSON, verifies its SHA-256
-        integrity hash against the linked WASM, and registers the
-        plugin with the audio worklet. Plugins are sandboxed — they
-        only see audio I/O, never the DOM or network.
-      </p>
+      <section class="registry-section" data-testid="plugin-picker-registry">
+        <header class="section-head">
+          <h3 class="section-title">Registry</h3>
+          <IconButton
+            variant="ghost"
+            ariaLabel="Refresh registry"
+            testId="plugin-registry-refresh"
+            title="Refresh"
+            onclick={() => void loadRegistry(true)}
+          >↻</IconButton>
+        </header>
+
+        {#if registryLoading}
+          <p class="hint" data-testid="plugin-registry-loading">Loading registry…</p>
+        {:else if registryError}
+          <p class="error" data-testid="plugin-registry-error">
+            Couldn't load registry: {registryError}
+          </p>
+        {:else if registryEntries.length === 0}
+          <p class="hint" data-testid="plugin-registry-empty">
+            The curated registry is empty. Paste a manifest URL below to install your own.
+          </p>
+        {:else}
+          <div class="grid">
+            {#each registryEntries as entry (entry.manifestUrl)}
+              <article class="card" data-testid="registry-card-{entry.manifest.id}">
+                <header class="card-head">
+                  <span class="card-name">{entry.manifest.name}</span>
+                  <span class="kind">{entry.manifest.kind}</span>
+                </header>
+                <p class="meta">
+                  <span class="mono">{entry.manifest.id}</span>
+                  <span class="dot">·</span>
+                  <span class="mono">v{entry.manifest.version}</span>
+                  {#if entry.manifest.license}
+                    <span class="dot">·</span>
+                    <span>{entry.manifest.license}</span>
+                  {/if}
+                </p>
+                <p class="meta dim">{paramSummary(entry.manifest)}</p>
+                <footer class="card-foot">
+                  {#if isInstalled(entry)}
+                    <span
+                      class="installed-badge"
+                      data-testid="registry-installed-{entry.manifest.id}"
+                    >✓ Installed</span>
+                  {:else}
+                    <Button
+                      variant="primary"
+                      disabled={installing}
+                      testId="registry-install-{entry.manifest.id}"
+                      onclick={() => void installFromRegistry(entry)}
+                    >Install</Button>
+                  {/if}
+                </footer>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
+      <section class="custom-install">
+        <h3 class="section-title">Install from URL</h3>
+        <div class="install-form">
+          <label class="lbl" for="manifest-url">Plugin manifest URL</label>
+          <input
+            id="manifest-url"
+            type="url"
+            placeholder="https://example.com/plugin.json"
+            bind:value={urlInput}
+            disabled={installing}
+            onkeydown={(e) => { if (e.key === 'Enter') void handleInstall(); }}
+            data-testid="plugin-url-input"
+          />
+          <Button
+            variant="primary"
+            disabled={installing || urlInput.trim().length === 0}
+            testId="plugin-install"
+            onclick={() => void handleInstall()}
+          >{installing ? 'Installing…' : 'Install'}</Button>
+        </div>
+        {#if installError}
+          <p class="error" data-testid="plugin-install-error">{installError}</p>
+        {/if}
+        <p class="hint">
+          The picker fetches the manifest JSON, verifies its SHA-256
+          integrity hash against the linked WASM, and registers the
+          plugin with the audio worklet. Plugins are sandboxed — they
+          only see audio I/O, never the DOM or network.
+        </p>
+      </section>
     {/if}
   </div>
 </dialog>
@@ -327,6 +488,41 @@
   .meta .mono { font-family: var(--font-mono); }
   .meta .dot { color: var(--fg-3); }
   .card-foot { margin-top: auto; }
+
+  .registry-section,
+  .custom-install {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+  .custom-install {
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--line-0);
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .section-title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--fg-2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+  }
+  .installed-badge {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--meter-ok);
+    letter-spacing: 0.04em;
+    padding: 4px 8px;
+    border: 1px solid var(--meter-ok);
+    border-radius: var(--r-sm);
+  }
 
   .install-form {
     display: grid;
