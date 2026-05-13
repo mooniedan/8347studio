@@ -163,11 +163,15 @@ function seedDemoSong(p: Project): void {
 
   // Pitches built from C minor pentatonic, rooted at C3 (MIDI 48).
   const C3 = 48;
-  const lead = (semi: number, beatStart: number, beatLen: number, vel = 100) => ({
+  // Helper note builder. `stepStart` / `stepLen` are 1/16 steps —
+  // there are 16 steps per bar, so a chord lasting the full bar uses
+  // `stepLen = 16`. Earlier seeds named these params `beat…`; that
+  // was misleading, since 1 beat = 4 steps.
+  const lead = (semi: number, stepStart: number, stepLen: number, vel = 100) => ({
     pitch: C3 + 12 + semi,
     velocity: vel,
-    startTick: beatStart * STEP_TICKS,
-    lengthTicks: beatLen * STEP_TICKS,
+    startTick: stepStart * STEP_TICKS,
+    lengthTicks: stepLen * STEP_TICKS,
   });
 
   p.doc.transact(() => {
@@ -176,31 +180,34 @@ function seedDemoSong(p: Project): void {
     p.meta.set('name', 'Demo Song');
 
     // 2. Lead — Subtractive synth on track 0 with a polyphonic chord
-    // phrase across 4 bars (showcases polyphony + piano roll). The
-    // engine wraps tick_pos at the loop region (see step 11 below)
-    // so the lead cycles in lock-step with the bass.
+    // progression across 4 bars (showcases polyphony + piano roll).
+    // Each chord sustains for 14 steps (3.5 beats); the trailing
+    // 2-step gap lets the synth release tail breathe before the next
+    // chord. The engine wraps tick_pos at the loop region (see step
+    // 11 below) so the lead cycles in lock-step with the drums.
     const PROG_STEPS = 64; // 4 bars × 16 sixteenth-steps
+    const CHORD_LEN = 14;  // 3.5 beats — full-bar pad with a small breath
     const leadId = addSubtractiveTrackInner(p, 'Lead');
     const leadIdx = 0;
     const leadClip = getPianoRollClipForTrack(p, leadIdx);
     if (leadClip) {
       (leadClip as Y.Map<unknown>).set('lengthTicks', PROG_STEPS * STEP_TICKS);
       // Bar 1: Cm (C, Eb, G).
-      addPianoRollNote(p, leadClip, lead(0, 0, 4));
-      addPianoRollNote(p, leadClip, lead(3, 0, 4));
-      addPianoRollNote(p, leadClip, lead(7, 0, 4));
+      addPianoRollNote(p, leadClip, lead(0, 0, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(3, 0, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(7, 0, CHORD_LEN));
       // Bar 2: Bb (Bb, D, F).
-      addPianoRollNote(p, leadClip, lead(-2, 16, 4));
-      addPianoRollNote(p, leadClip, lead(2, 16, 4));
-      addPianoRollNote(p, leadClip, lead(5, 16, 4));
+      addPianoRollNote(p, leadClip, lead(-2, 16, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(2, 16, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(5, 16, CHORD_LEN));
       // Bar 3: Ab (Ab, C, Eb).
-      addPianoRollNote(p, leadClip, lead(-4, 32, 4));
-      addPianoRollNote(p, leadClip, lead(0, 32, 4));
-      addPianoRollNote(p, leadClip, lead(3, 32, 4));
+      addPianoRollNote(p, leadClip, lead(-4, 32, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(0, 32, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(3, 32, CHORD_LEN));
       // Bar 4: G (G, B, D) — turnaround.
-      addPianoRollNote(p, leadClip, lead(-5, 48, 4));
-      addPianoRollNote(p, leadClip, lead(-1, 48, 4));
-      addPianoRollNote(p, leadClip, lead(2, 48, 4));
+      addPianoRollNote(p, leadClip, lead(-5, 48, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(-1, 48, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(2, 48, CHORD_LEN));
     }
     // Synth voicing — punchier than defaults.
     setSynthParam(p, leadIdx, SUB_FILTER_CUTOFF, 1200);
