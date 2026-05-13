@@ -6,6 +6,7 @@
     setSynthParam,
     getSynthParam,
     getTrackPluginId,
+    getTrackName,
     listMidiBindings,
   } from './project';
   import { getDescriptors, isHostRendered } from './plugin-host';
@@ -13,6 +14,8 @@
     GROUP_LABELS,
     type ParamDescriptor,
   } from './plugin-descriptors';
+  import ParamControl from './ui/ParamControl.svelte';
+  import ADSRShape from './ui/ADSRShape.svelte';
 
   const {
     project,
@@ -139,108 +142,83 @@
     }
   }
 
-  // Slider position (0..1) → value. Linear or exponential mapping.
-  function posToValue(d: ParamDescriptor, pos: number): number {
-    pos = Math.max(0, Math.min(1, pos));
-    if (d.curve === 'exp' && d.min > 0) {
-      return d.min * Math.pow(d.max / d.min, pos);
-    }
-    return d.min + (d.max - d.min) * pos;
+  function commitParam(d: ParamDescriptor, v: number) {
+    setSynthParam(project, trackIdx, d.id, v);
   }
 
-  function valueToPos(d: ParamDescriptor, value: number): number {
-    if (d.curve === 'exp' && d.min > 0) {
-      const ratio = value / d.min;
-      const span = d.max / d.min;
-      return Math.log(ratio) / Math.log(span);
-    }
-    return (value - d.min) / (d.max - d.min);
+  /// Detect A/D/S/R param sets inside a group so we can prepend an
+  /// envelope-shape view. Matches by case-insensitive name suffix —
+  /// works for "Amp Attack", "Filter Attack", etc.
+  function adsrFor(items: ParamDescriptor[]): {
+    a: ParamDescriptor; d: ParamDescriptor; s: ParamDescriptor; r: ParamDescriptor;
+  } | null {
+    const byTail = (suffix: string) =>
+      items.find((p) => p.name.toLowerCase().endsWith(suffix));
+    const a = byTail('attack');
+    const d = byTail('decay');
+    const s = byTail('sustain');
+    const r = byTail('release');
+    if (a && d && s && r) return { a, d, s, r };
+    return null;
   }
 
-  function format(d: ParamDescriptor, v: number): string {
-    if (d.options) return d.options[Math.round(v)] ?? String(v);
-    if (d.unit === 'hz') return v >= 1000 ? `${(v / 1000).toFixed(2)} kHz` : `${v.toFixed(0)} Hz`;
-    if (d.unit === 'seconds') return v < 1 ? `${(v * 1000).toFixed(0)} ms` : `${v.toFixed(2)} s`;
-    if (d.unit === 'cents') return `${v.toFixed(0)} ¢`;
-    if (d.unit === 'db') return `${v.toFixed(1)} dB`;
-    if (d.unit === 'percent') return `${(v * 100).toFixed(0)}%`;
-    if (Math.abs(v) < 1) return v.toFixed(2);
-    return v.toFixed(2);
-  }
+  /// Friendly display name for the header — strip the builtin: prefix
+  /// and title-case the rest. Third-party plugins keep their manifest
+  /// name (caller can override by setting a custom title at the
+  /// PluginPanel mount site later).
+  const friendlyName = $derived.by(() => {
+    if (!pluginId) return '';
+    const base = pluginId.replace(/^builtin:/, '');
+    return base.charAt(0).toUpperCase() + base.slice(1);
+  });
 
-  function onSliderInput(d: ParamDescriptor, ev: Event) {
-    const pos = Number((ev.target as HTMLInputElement).value);
-    const value = posToValue(d, pos);
-    setSynthParam(project, trackIdx, d.id, value);
-  }
-
-  function onDropdown(d: ParamDescriptor, ev: Event) {
-    const value = Number((ev.target as HTMLSelectElement).value);
-    setSynthParam(project, trackIdx, d.id, value);
-  }
+  const trackNameValue = $derived.by(() => {
+    if (!project) return '';
+    if (trackIdx < 0 || trackIdx >= project.tracks.length) return '';
+    return getTrackName(project, trackIdx);
+  });
 </script>
 
 {#if pluginId && isHostRendered(pluginId)}
   <section class="panel" data-testid="plugin-panel">
     <header class="panel-head">
-      <span class="panel-title">{pluginId.replace('builtin:', '')}</span>
+      <div class="panel-head-l">
+        <span class="panel-title">{friendlyName}</span>
+        <span class="panel-preset" data-testid="plugin-preset">Default</span>
+      </div>
+      <span class="panel-track">{trackNameValue}</span>
     </header>
     <div class="groups">
       {#each groups as g}
-        <div class="group" data-testid={`plugin-group-${g.name}`}>
-          <div class="group-label">{g.label}</div>
-          <div class="controls">
+        {@const adsr = adsrFor(g.items)}
+        <section class="group" data-testid={`plugin-group-${g.name}`}>
+          <header class="group-head">{g.label}</header>
+          {#if adsr}
+            <ADSRShape
+              attack={values[adsr.a.id] ?? adsr.a.default}
+              decay={values[adsr.d.id] ?? adsr.d.default}
+              sustain={values[adsr.s.id] ?? adsr.s.default}
+              release={values[adsr.r.id] ?? adsr.r.default}
+              width={200}
+              height={56}
+            />
+          {/if}
+          <div class="controls" class:knobby={g.items.some((d) => {
+            return d.curve === 'exp' || d.unit === 'hz';
+          })}>
             {#each g.items as d (d.id)}
-              {@const v = values[d.id] ?? d.default}
-              {@const boundCC = bindings.get(d.id)}
-              <label class="control" data-testid={`param-${d.id}`}>
-                <span class="cname">{d.name}</span>
-                {#if d.options}
-                  <select
-                    onchange={(e) => onDropdown(d, e)}
-                    value={Math.round(v)}
-                    data-testid={`param-${d.id}-input`}
-                  >
-                    {#each d.options as opt, i}
-                      <option value={i}>{opt}</option>
-                    {/each}
-                  </select>
-                {:else}
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.001"
-                    value={valueToPos(d, v)}
-                    oninput={(e) => onSliderInput(d, e)}
-                    data-testid={`param-${d.id}-input`}
-                    aria-label={d.name}
-                  />
-                {/if}
-                <span class="cval" data-testid={`param-${d.id}-value`}>{format(d, v)}</span>
-                {#if boundCC != null}
-                  <button
-                    type="button"
-                    class="cc-chip"
-                    onclick={() => onUnbindCC(boundCC)}
-                    data-testid={`param-${d.id}-cc`}
-                    title="Click to unbind"
-                  >CC{boundCC} ✕</button>
-                {/if}
-                {#if learnActive}
-                  <button
-                    type="button"
-                    class="learn-target"
-                    class:pending={learnPendingCC != null}
-                    onclick={() => onParamClick(d.id)}
-                    data-testid={`param-${d.id}-learn`}
-                    aria-label={`Bind hardware CC to ${d.name}`}
-                  ></button>
-                {/if}
-              </label>
+              <ParamControl
+                descriptor={d}
+                value={values[d.id] ?? d.default}
+                boundCC={bindings.get(d.id)}
+                learnActive={learnActive && learnPendingCC != null}
+                onChange={(v) => commitParam(d, v)}
+                onLearnClick={onBindParam}
+                onUnbindCC={onUnbindCC}
+              />
             {/each}
           </div>
-        </div>
+        </section>
       {/each}
     </div>
   </section>
@@ -248,104 +226,78 @@
 
 <style>
   .panel {
-    background: #131313;
-    border: 1px solid #2a2a2a;
-    color: #ccc;
-    font-family: system-ui, sans-serif;
-    font-size: 11px;
-    padding: 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-md);
+    color: var(--fg-1);
+    font-family: var(--font-sans);
+    font-size: var(--text-12);
   }
   .panel-head {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    border-bottom: 1px solid #2a2a2a;
-    padding-bottom: 4px;
-    margin-bottom: 8px;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--line-1);
+    background: var(--bg-1);
+  }
+  .panel-head-l {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-3);
   }
   .panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--text-12);
     font-weight: 600;
-    color: #ddd;
+    color: var(--fg-0);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .panel-preset {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--fg-2);
+    border: 1px solid var(--line-2);
+    background: var(--bg-0);
+    padding: 1px 6px;
+    border-radius: var(--r-sm);
+  }
+  .panel-track {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
   .groups {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--sp-3);
+    padding: var(--sp-3);
   }
   .group {
-    background: #181818;
-    border: 1px solid #2a2a2a;
-    padding: 6px;
+    background: var(--bg-1);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
   }
-  .group-label {
-    font-weight: 600;
-    color: #888;
+  .group-head {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--fg-2);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 6px;
-    font-size: 10px;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--line-0);
+    padding-bottom: var(--sp-2);
   }
   .controls {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-  }
-  .control {
-    display: grid;
-    grid-template-columns: 1fr 1.2fr 0.7fr auto auto;
-    gap: 4px;
-    align-items: center;
-  }
-  .cc-chip {
-    appearance: none;
-    background: #2a0e0e;
-    color: #ff8585;
-    border: 1px solid #ff3a3a;
-    border-radius: 8px;
-    padding: 0 4px;
-    font: 9px ui-monospace, monospace;
-    cursor: pointer;
-  }
-  .cc-chip:hover {
-    background: #3a1414;
-  }
-  .learn-target {
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 1px solid #4ad6ff;
-    background: transparent;
-    cursor: pointer;
-    padding: 0;
-  }
-  .learn-target.pending {
-    background: #4ad6ff;
-    box-shadow: 0 0 4px #4ad6ff;
-    animation: learn-pulse 0.8s infinite;
-  }
-  @keyframes learn-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
-  .cname {
-    color: #aaa;
-  }
-  .cval {
-    color: #ddd;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    font-size: 10px;
-  }
-  input[type='range'] {
-    width: 100%;
-    accent-color: #ff8c00;
-  }
-  select {
-    background: #222;
-    color: #ddd;
-    border: 1px solid #333;
-    font-size: 10px;
-    padding: 1px 2px;
+    gap: var(--sp-3);
   }
 </style>

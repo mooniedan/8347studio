@@ -62,15 +62,13 @@ test.describe('phase-2 / M3 plugin panel (host-rendered descriptors)', () => {
       .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF))
       .toBeCloseTo(2000, 0);
 
-    await page.evaluate(({ pid }) => {
-      const el = document.querySelector(
-        `[data-testid="param-${pid}-input"]`,
-      ) as HTMLInputElement;
-      el.value = '0.9';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, { pid: SUB_PID_FILTER_CUTOFF });
+    // Phase-8 M8 — the UI's cutoff control is now a Knob; tests
+    // drive the param via __bridge.setSynthParam (Y.Doc path) so
+    // the round-trip Y.Doc → SAB → engine still gets exercised.
+    await page.evaluate(({ idx, pid }) => {
+      (window as any).__bridge.setSynthParam(idx, pid, 8000);
+    }, { idx, pid: SUB_PID_FILTER_CUTOFF });
 
-    // Slider position 0.9 on the exp-curve 20 Hz..20 kHz lands ~10 kHz.
     await expect
       .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF), { timeout: 3000 })
       .toBeGreaterThan(5000);
@@ -83,14 +81,12 @@ test.describe('phase-2 / M3 plugin panel (host-rendered descriptors)', () => {
     await page.click('[data-testid="add-synth-track"]');
     const idx = (await trackCount(page)) - 1;
 
-    // Drive the slider to a non-default value.
-    await page.evaluate(({ pid }) => {
-      const el = document.querySelector(
-        `[data-testid="param-${pid}-input"]`,
-      ) as HTMLInputElement;
-      el.value = '0.85';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, { pid: SUB_PID_FILTER_CUTOFF });
+    // Drive the param to a non-default value via the Y.Doc path
+    // (the UI's slider became a Knob in Phase-8 M8; the round-trip
+    // we care about is Y.Doc → IndexedDB → reload → engine).
+    await page.evaluate(({ idx, pid }) => {
+      (window as any).__bridge.setSynthParam(idx, pid, 6000);
+    }, { idx, pid: SUB_PID_FILTER_CUTOFF });
 
     await expect
       .poll(() => trackParam(page, idx, SUB_PID_FILTER_CUTOFF), { timeout: 3000 })

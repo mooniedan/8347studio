@@ -889,6 +889,14 @@
           debugTrackPeak: (track: number) => audio.debugRead('trackPeak', track),
           debugTrackParam: (track: number, paramId: number) =>
             audio.debugTrackParam(track, paramId),
+          /// Phase-8 M8 — UI now drives synth params via Knob/Slider
+          /// components rather than range-input element values. Tests
+          /// that need to write a param go through this Y.Doc path so
+          /// the round-trip (Y.Doc → SAB → engine) stays exercised.
+          setSynthParam: (track: number, paramId: number, value: number) => {
+            if (!project) return;
+            setSynthParam(project, track, paramId, value);
+          },
           setParam: (track: number, paramId: number, value: number) =>
             b.setParam(track, paramId, value),
           addSubtractiveTrack: () => {

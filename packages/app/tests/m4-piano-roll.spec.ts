@@ -120,15 +120,12 @@ test.describe('phase-2 / M4 piano-roll clip + scheduler', () => {
       .poll(() => trackPeak(page, synthIdx), { timeout: 4000, intervals: [80, 80, 120] })
       .toBeGreaterThan(0.05);
 
-    // Slide cutoff way down — engine peak drops as the LP filter
-    // chokes the note.
-    await page.evaluate(({ pid }) => {
-      const el = document.querySelector(
-        `[data-testid="param-${pid}-input"]`,
-      ) as HTMLInputElement;
-      el.value = '0';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, { pid: SUB_PID_FILTER_CUTOFF });
+    // Cut cutoff way down — engine peak drops as the LP filter
+    // chokes the note. Use the Y.Doc backdoor since the UI control
+    // moved from a range input to a Knob in Phase-8 M8.
+    await page.evaluate(({ idx, pid }) => {
+      (window as any).__bridge.setSynthParam(idx, pid, 20);
+    }, { idx: synthIdx, pid: SUB_PID_FILTER_CUTOFF });
 
     await expect
       .poll(() => trackParam(page, synthIdx, SUB_PID_FILTER_CUTOFF), { timeout: 3000 })
