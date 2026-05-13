@@ -9,7 +9,8 @@ The top bar holds the global transport. Read left-to-right:
 - **Play / Stop** — green when stopped, accent-red when playing.
   Stop returns the playhead to bar 1 tick 0.
 - **Loop toggle + bar range** — when ticked, playback wraps at the
-  loop end. Bars are 1-indexed.
+  loop end. Bars are 1-indexed. **New projects default to a 4-bar
+  loop, enabled** — uncheck the toggle for linear playback.
 - **BPM** — drag the readout vertically for ±1 BPM per pixel.
   - Hold **Shift** while dragging for 0.1 BPM precision.
   - The mouse wheel works too.

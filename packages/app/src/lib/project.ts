@@ -118,11 +118,21 @@ function makeId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/// 4-bar default loop = 4 × 16 sixteenth-steps × 240 ticks = 15360.
+/// A loop is on by default for fresh projects so a freshly-painted
+/// pattern plays continuously — without it, a clip plays once and
+/// silence follows forever (transport keeps advancing past the
+/// clip's lengthTicks). The Transport UI exposes the toggle + bar
+/// inputs so users can disable / extend it.
+const DEFAULT_LOOP_BARS = 4;
+const DEFAULT_LOOP_TICKS = DEFAULT_LOOP_BARS * STEPS_PER_CLIP * STEP_TICKS;
+
 function seedDefaults(p: Project): void {
   p.doc.transact(() => {
     seedMetaAndTempo(p, 120);
     const { trackId } = createMidiTrack(p, 'sine');
     createStepSeqClip(p, trackId, defaultEmptySteps());
+    setLoopRegion(p, { startTick: 0, endTick: DEFAULT_LOOP_TICKS });
   });
 }
 
@@ -135,6 +145,7 @@ function seedFromLegacy(p: Project, legacy: LegacyHash): void {
       ? legacy.steps
       : defaultEmptySteps();
     createStepSeqClip(p, trackId, stepNotes);
+    setLoopRegion(p, { startTick: 0, endTick: DEFAULT_LOOP_TICKS });
   });
 }
 

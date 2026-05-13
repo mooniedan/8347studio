@@ -182,11 +182,9 @@ test.describe('demo song', () => {
     await page.goto('/');
     await bridgeReady(page);
 
-    // Default project starts un-looped.
-    await expect(page.locator('[data-testid="loop-toggle"]')).not.toBeChecked();
-
-    // Enable loop with bar inputs at defaults (1–4).
-    await page.locator('[data-testid="loop-toggle"]').check();
+    // Fresh projects ship with a 4-bar loop enabled — so freshly-painted
+    // patterns play continuously without the user discovering the toggle.
+    await expect(page.locator('[data-testid="loop-toggle"]')).toBeChecked();
     await expect.poll(async () => {
       const lr = await page.evaluate(() => {
         const w = window as unknown as {
