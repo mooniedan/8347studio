@@ -1,84 +1,159 @@
 <script lang="ts">
   /**
-   * Phase 8 follow-up — user-guide renderer.
+   * Phase 8 follow-up — user-guide renderer (multi-page).
    *
-   * Fetches /docs/user-guide.md, renders it with `marked`, and lays
-   * out a sticky TOC sidebar built from the h2/h3 headings. Mounts
-   * in two places: full-page when the app is opened at `?docs=1`
-   * (used as the non-PIP fallback), and inside a Document PIP
-   * window via `lib/pip.ts`'s createDocsPipController.
+   * Loads `index.json` from the `docs/` directory, renders a left
+   * navigation list of pages, and fetches the selected page's
+   * markdown on demand. All page-to-page navigation is in-component
+   * state — no URL navigation, so the PIP window never closes when
+   * a link is clicked.
+   *
+   * In-page links use the convention `#page:<slug>` to switch pages
+   * (intercepted via the article click handler); plain `#anchor`
+   * links scrollIntoView within the article instead of mutating the
+   * window URL.
    */
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { marked } from 'marked';
 
-  let { sourceUrl = '/docs/user-guide.md' }: { sourceUrl?: string } = $props();
+  type Page = { slug: string; title: string };
+  type Index = { title: string; subtitle?: string; pages: Page[] };
 
+  let { indexUrl = '/docs/index.json' }: { indexUrl?: string } = $props();
+
+  let index = $state<Index | null>(null);
+  let currentSlug = $state<string>('');
   let html = $state('');
-  let toc = $state<{ id: string; text: string; level: number }[]>([]);
-  let loading = $state(true);
+  let loadingIndex = $state(true);
+  let loadingPage = $state(false);
   let loadError = $state<string | undefined>(undefined);
+  let article: HTMLElement | null = $state(null);
 
   onMount(async () => {
     try {
-      const resp = await fetch(sourceUrl);
-      if (!resp.ok) throw new Error(`fetch ${sourceUrl}: ${resp.status}`);
-      const md = await resp.text();
-      // Configure marked with stable heading ids so the TOC can
-      // anchor to them. Renderer overrides slug each heading from
-      // its text.
-      const slug = (text: string) =>
-        text
-          .toLowerCase()
-          .replace(/<[^>]+>/g, '')
-          .replace(/[^a-z0-9\s-]/g, '')
-          .trim()
-          .replace(/\s+/g, '-');
-      const renderer = new marked.Renderer();
-      const builtToc: typeof toc = [];
-      renderer.heading = ({ text, depth, tokens }) => {
-        const plain = tokens
-          .map((t) => ('text' in t ? (t as { text: string }).text : ''))
-          .join('');
-        const id = slug(plain || text);
-        if (depth === 2 || depth === 3) {
-          builtToc.push({ id, text: plain || text, level: depth });
-        }
-        return `<h${depth} id="${id}">${plain || text}</h${depth}>\n`;
-      };
-      html = await marked.parse(md, { renderer });
-      toc = builtToc;
+      const resp = await fetch(indexUrl);
+      if (!resp.ok) throw new Error(`fetch ${indexUrl}: ${resp.status}`);
+      const data = (await resp.json()) as Index;
+      index = data;
+      const initial = data.pages[0]?.slug;
+      if (initial) await loadPage(initial);
     } catch (err) {
       loadError = (err as Error).message;
     } finally {
-      loading = false;
+      loadingIndex = false;
     }
   });
+
+  async function loadPage(slug: string) {
+    if (!index) return;
+    const page = index.pages.find((p) => p.slug === slug);
+    if (!page) return;
+    currentSlug = slug;
+    loadingPage = true;
+    loadError = undefined;
+    try {
+      const baseUrl = new URL(indexUrl, window.location.href);
+      const url = new URL(`${slug}.md`, baseUrl);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`fetch ${url.pathname}: ${resp.status}`);
+      const md = await resp.text();
+      html = await marked.parse(md);
+    } catch (err) {
+      loadError = (err as Error).message;
+      html = '';
+    } finally {
+      loadingPage = false;
+    }
+    await tick();
+    article?.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }
+
+  function handleArticleClick(event: MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    const anchor = target?.closest('a') as HTMLAnchorElement | null;
+    if (!anchor) return;
+    const href = anchor.getAttribute('href') ?? '';
+    // Intercept #page:<slug> for cross-page navigation.
+    if (href.startsWith('#page:')) {
+      event.preventDefault();
+      const slug = href.slice('#page:'.length);
+      void loadPage(slug);
+      return;
+    }
+    // Intercept plain #anchor — scroll within article, don't
+    // mutate window URL (which closes Document PIP windows).
+    if (href.startsWith('#')) {
+      event.preventDefault();
+      const id = href.slice(1);
+      const el = article?.querySelector(`#${CSS.escape(id)}`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    // External links open in a new tab so they don't navigate the
+    // (possibly PIP) docs window.
+    if (/^https?:/.test(href)) {
+      anchor.setAttribute('target', '_blank');
+      anchor.setAttribute('rel', 'noopener noreferrer');
+    }
+  }
+
+  function onNavClick(event: MouseEvent, slug: string) {
+    event.preventDefault();
+    void loadPage(slug);
+  }
 </script>
 
 <div class="docs" data-testid="docs-panel">
-  <aside class="toc" aria-label="Table of contents">
-    <div class="toc-head">8347 Studio</div>
-    {#if toc.length > 0}
+  <aside class="nav" aria-label="User guide navigation">
+    <div class="nav-head">
+      <div class="nav-title">{index?.title ?? '8347 Studio'}</div>
+      {#if index?.subtitle}
+        <div class="nav-sub">{index.subtitle}</div>
+      {/if}
+    </div>
+    {#if loadingIndex}
+      <p class="status" data-testid="docs-index-loading">Loading…</p>
+    {:else if loadError && !index}
+      <p class="status error" data-testid="docs-index-error">
+        Couldn't load the index: {loadError}
+      </p>
+    {:else if index}
       <nav>
         <ul>
-          {#each toc as entry (entry.id)}
-            <li class="lvl-{entry.level}">
-              <a href="#{entry.id}" data-testid="toc-{entry.id}">{entry.text}</a>
+          {#each index.pages as page (page.slug)}
+            <li>
+              <a
+                href="#page:{page.slug}"
+                class:active={currentSlug === page.slug}
+                aria-current={currentSlug === page.slug ? 'page' : undefined}
+                data-testid="docs-nav-{page.slug}"
+                onclick={(e) => onNavClick(e, page.slug)}
+              >{page.title}</a>
             </li>
           {/each}
         </ul>
       </nav>
     {/if}
   </aside>
+
   <main class="body">
-    {#if loading}
-      <p class="status" data-testid="docs-loading">Loading…</p>
-    {:else if loadError}
+    {#if loadingIndex}
+      <p class="status" data-testid="docs-loading">Loading user guide…</p>
+    {:else if loadError && !html}
       <p class="status error" data-testid="docs-error">
-        Couldn't load the user guide: {loadError}
+        Couldn't load the guide: {loadError}
       </p>
     {:else}
-      <article class="prose" data-testid="docs-content">{@html html}</article>
+      <article
+        class="prose"
+        data-testid="docs-content"
+        data-page={currentSlug}
+        bind:this={article}
+        onclick={handleArticleClick}
+      >{@html html}</article>
+      {#if loadingPage}
+        <p class="status floating" data-testid="docs-page-loading">Loading…</p>
+      {/if}
     {/if}
   </main>
 </div>
@@ -86,8 +161,8 @@
 <style>
   .docs {
     display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: var(--sp-4);
+    grid-template-columns: 220px 1fr;
+    gap: 0;
     width: 100%;
     height: 100%;
     background: var(--bg-1);
@@ -95,24 +170,33 @@
     font-family: var(--font-sans);
     font-size: var(--text-12);
   }
-  .toc {
+  .nav {
     background: var(--bg-2);
     border-right: 1px solid var(--line-1);
     padding: var(--sp-4) var(--sp-3);
     overflow-y: auto;
-    position: sticky;
-    top: 0;
     height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
   }
-  .toc-head {
+  .nav-head {
+    border-bottom: 1px solid var(--line-1);
+    padding-bottom: var(--sp-3);
+  }
+  .nav-title {
     font-family: var(--font-mono);
-    font-size: var(--text-11);
-    color: var(--fg-2);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: var(--sp-4);
+    font-size: var(--text-12);
+    color: var(--fg-0);
+    letter-spacing: 0.04em;
   }
-  .toc nav ul {
+  .nav-sub {
+    font-size: var(--text-10);
+    color: var(--fg-2);
+    margin-top: 2px;
+    font-style: italic;
+  }
+  .nav nav ul {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -120,27 +204,42 @@
     flex-direction: column;
     gap: 2px;
   }
-  .toc li.lvl-3 { padding-left: var(--sp-3); }
-  .toc a {
+  .nav a {
     color: var(--fg-2);
     text-decoration: none;
     font-size: var(--text-11);
     line-height: 1.5;
     display: block;
-    padding: 2px 4px;
+    padding: 4px 8px;
     border-radius: var(--r-sm);
+    cursor: pointer;
   }
-  .toc a:hover { color: var(--fg-0); background: var(--bg-3); }
+  .nav a:hover { color: var(--fg-0); background: var(--bg-3); }
+  .nav a.active {
+    color: var(--fg-0);
+    background: var(--bg-3);
+    border-left: 2px solid var(--accent);
+    padding-left: 6px;
+  }
 
   .body {
     overflow-y: auto;
     padding: var(--sp-5) var(--sp-6);
     max-height: 100vh;
+    position: relative;
   }
   .status { color: var(--fg-2); font-size: var(--text-12); }
   .status.error { color: var(--accent-hi); }
+  .status.floating {
+    position: absolute;
+    top: var(--sp-3);
+    right: var(--sp-4);
+    background: var(--bg-2);
+    padding: 2px 8px;
+    border-radius: var(--r-sm);
+    font-size: var(--text-10);
+  }
 
-  /* prose — markdown-rendered article styles */
   .prose {
     max-width: 720px;
     line-height: 1.6;
@@ -178,7 +277,7 @@
     margin: var(--sp-4) 0 var(--sp-2);
   }
   .prose :global(p) { margin: 0 0 var(--sp-3); }
-  .prose :global(a) { color: var(--accent-hi); }
+  .prose :global(a) { color: var(--accent-hi); cursor: pointer; }
   .prose :global(a:hover) { color: var(--fg-0); }
   .prose :global(ul),
   .prose :global(ol) {

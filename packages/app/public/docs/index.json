@@ -1,0 +1,21 @@
+{
+  "title": "8347 Studio — user guide",
+  "subtitle": "Beat in L33T (8 = B, 3 = E, 4 = A, 7 = T)",
+  "pages": [
+    { "slug": "overview",       "title": "Overview" },
+    { "slug": "quick-start",    "title": "Quick start" },
+    { "slug": "transport",      "title": "Transport bar" },
+    { "slug": "tracks",         "title": "Tracks" },
+    { "slug": "inspector",      "title": "Track inspector" },
+    { "slug": "editing",        "title": "Editing patterns" },
+    { "slug": "mixer",          "title": "Mixer" },
+    { "slug": "plugins",        "title": "Plugins" },
+    { "slug": "projects",       "title": "Projects" },
+    { "slug": "midi",           "title": "MIDI" },
+    { "slug": "recording",      "title": "Recording" },
+    { "slug": "multi-window",   "title": "Multi-window workflow" },
+    { "slug": "shortcuts",      "title": "Keyboard shortcuts" },
+    { "slug": "files",          "title": "Files & storage" },
+    { "slug": "troubleshooting","title": "Troubleshooting" }
+  ]
+}

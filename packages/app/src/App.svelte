@@ -1338,9 +1338,10 @@
           disabled={!pipSupported}
           onclick={openPip}
           title={pipSupported
-            ? 'Open transport in a Picture-in-Picture window'
-            : 'Document PIP not supported in this browser'}
-        >⌐ PIP</button>
+            ? 'Float the transport in an always-on-top Picture-in-Picture window'
+            : 'Picture-in-Picture not supported in this browser'}
+          aria-label="Open floating transport (Picture-in-Picture)"
+        >⌐ Transport</button>
 
         <button
           class="tb"
