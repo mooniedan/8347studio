@@ -377,6 +377,32 @@ const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
   'wasm': INSERT_WASM,
 };
 
+/// Phase-8 M5b — runtime resolver for `manifestId → handle`. The
+/// picker re-registers plugins per session and gets fresh handles;
+/// this lookup translates a slot's stable manifest id (the only
+/// thing persisted across reload) to the live handle so the
+/// snapshot encoder can address it.
+let getHandleForManifest: (manifestId: string) => number | undefined = () => undefined;
+export function setHandleForManifestLookup(
+  fn: (manifestId: string) => number | undefined,
+): void {
+  getHandleForManifest = fn;
+}
+
+function resolveWasmHandle(slot: Y.Map<unknown>): number | undefined {
+  // Prefer the persistent manifestId path (picker); fall back to
+  // the runtime-only wasmHandle for the M6 direct-attach test path.
+  const manifestId = slot.get('manifestId') as string | undefined;
+  if (manifestId) {
+    const live = getHandleForManifest(manifestId);
+    if (typeof live === 'number' && live > 0) return live;
+    return undefined;
+  }
+  const direct = slot.get('wasmHandle') as number | undefined;
+  if (typeof direct === 'number' && direct > 0) return direct;
+  return undefined;
+}
+
 /// Encode a single insert (and its branches if it's a Container).
 /// Returns null if the slot's pluginId is unknown so the caller can
 /// keep the count in sync with the encoded payloads.
@@ -384,12 +410,14 @@ function insertSnapshotBytes(slot: Y.Map<unknown>): Uint8Array | null {
   const pid = slot.get('pluginId') as string | undefined;
   if (!pid || !(pid in INSERT_KIND_BY_PLUGIN_ID)) return null;
   const kindByte = INSERT_KIND_BY_PLUGIN_ID[pid];
-  // Phase-8 M6 — wasm inserts skip the encoding if no handle is set;
-  // attachment hasn't completed (or got stale across reload). The
-  // engine treats the slot as absent.
+  // Phase-8 M6/M5b — wasm inserts skip the encoding if no live
+  // handle can be resolved (attachment incomplete, plugin failed to
+  // load on boot, etc.). The engine treats the slot as absent — the
+  // signal flows around it untouched.
+  let resolvedHandle: number | undefined;
   if (pid === 'wasm') {
-    const handle = slot.get('wasmHandle') as number | undefined;
-    if (typeof handle !== 'number' || handle === 0) return null;
+    resolvedHandle = resolveWasmHandle(slot);
+    if (resolvedHandle === undefined) return null;
   }
   const params = slot.get('params') as Y.Map<unknown> | undefined;
   const entries: [number, number][] = [];
@@ -403,8 +431,7 @@ function insertSnapshotBytes(slot: Y.Map<unknown>): Uint8Array | null {
   // enum, matching the Rust `InsertKind::Wasm { handle: u32 }`
   // layout postcard expects.
   if (pid === 'wasm') {
-    const handle = slot.get('wasmHandle') as number;
-    parts.push(u32VarintToBytes(handle));
+    parts.push(u32VarintToBytes(resolvedHandle!));
   }
   parts.push(u32VarintToBytes(entries.length));
   for (const [id, val] of entries) {

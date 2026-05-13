@@ -14,7 +14,7 @@
   import MixerDrawer from './lib/MixerDrawer.svelte';
   import MasterMeter from './lib/MasterMeter.svelte';
   import PluginPicker, { type InstalledPlugin } from './lib/PluginPicker.svelte';
-  import { parseManifestJson } from './lib/plugin-manifest';
+  import { parseManifestJson, type PluginManifest } from './lib/plugin-manifest';
   import { sha256 as wasmSha256 } from './lib/plugin-loader';
   // Phase-8 M5: the picker installs via the worklet (canonical owner
   // of the plugin WebAssembly.Instance), NOT via the M3a JS-side
@@ -37,6 +37,9 @@
     addBusTrack,
     addAudioTrack,
     addWasmInsert,
+    addWasmInsertByManifest,
+    recordInstalledPlugin,
+    listInstalledPlugins,
     setInsertParam,
     addAudioRegion,
     getAudioRegions,
@@ -83,6 +86,7 @@
     attachBridge,
     attachWasmPluginToTrack,
     detachWasmPluginFromTrack,
+    setHandleForManifestLookup,
     type Bridge,
   } from './lib/engine-bridge';
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
@@ -112,7 +116,12 @@
   let pickerOpen = $state(false);
   let installedPlugins = $state<InstalledPlugin[]>([]);
 
+  /// Persist + register a plugin under a manifest URL. Writes the
+  /// manifest to Y.Doc `meta.installedPlugins` so a reload can
+  /// re-fetch and re-register — boot's `reloadInstalledPlugins`
+  /// runs the same fetch+verify+register dance.
   async function installPluginFromUrl(url: string): Promise<string | undefined> {
+    if (!project) return 'no project loaded';
     try {
       const manifestResp = await fetch(url);
       if (!manifestResp.ok) return `fetch failed: ${manifestResp.status}`;
@@ -123,14 +132,9 @@
         return `invalid manifest at ${head.path || '<root>'}: ${head.message}`;
       }
       const manifest = parsed.manifest;
-      // Refuse duplicates by id — clicking install twice for the
-      // same plugin no-ops with a friendly note.
       if (installedPlugins.some((p) => p.manifest.id === manifest.id)) {
         return `already installed: ${manifest.id}`;
       }
-      // Resolve relative wasm URL against the manifest URL so
-      // manifests served from a CDN can reference assets sitting
-      // alongside them.
       const wasmAbs = new URL(manifest.wasm, new URL(url, window.location.href)).toString();
       const wasmResp = await fetch(wasmAbs);
       if (!wasmResp.ok) return `wasm fetch failed: ${wasmResp.status}`;
@@ -139,16 +143,18 @@
       if (got !== manifest.wasmIntegrity) {
         return `integrity mismatch: manifest says ${manifest.wasmIntegrity}, wasm hashed to ${got}`;
       }
-      // Register with the worklet — instrument vs effect determines
-      // whether the engine accepts it in the instrument slot vs an
-      // insert chain. The picker treats inputs/outputs symmetrically
-      // for now; per-kind defaults can come from manifest.kind.
       const handle = await audio.postLoadWasmPlugin(wasmBytes, {
         maxBlockSize: 256,
         inChannels: manifest.kind === 'instrument' ? 0 : 1,
         outChannels: 1,
       });
       installedPlugins = [...installedPlugins, { manifest, handle }];
+      // Persist a manifest variant that points at the absolute wasm
+      // URL we just verified — so reload doesn't have to re-resolve
+      // the relative path against the original manifest URL (which
+      // may not be retained).
+      const persisted = { ...manifest, wasm: wasmAbs };
+      recordInstalledPlugin(project, manifest.id, JSON.stringify(persisted));
       return undefined;
     } catch (err) {
       return `install error: ${(err as Error).message}`;
@@ -158,9 +164,76 @@
   function addInstalledPluginToSelectedTrack(plugin: InstalledPlugin): void {
     if (!project) return;
     if (selectedTrackIdx < 0 || selectedTrackIdx >= project.tracks.length) return;
-    addWasmInsert(project, selectedTrackIdx, plugin.handle);
+    if (plugin.loadError || plugin.handle === 0) return; // unusable
+    addWasmInsertByManifest(project, selectedTrackIdx, plugin.manifest.id);
     pickerOpen = false;
   }
+
+  /// Phase-8 M5b — on every fresh boot, walk meta.installedPlugins
+  /// and re-fetch + integrity-verify + re-register each manifest so
+  /// the picker shows them and any track inserts that reference
+  /// them by id can be addressed by the engine. Failures leave the
+  /// entry with handle=0 + loadError set; the slot encoder drops
+  /// failed inserts (silent audio passthrough), and the picker card
+  /// shows a red badge so the user sees what happened.
+  async function reloadInstalledPlugins(): Promise<void> {
+    if (!project) return;
+    const stored = listInstalledPlugins(project);
+    if (stored.length === 0) {
+      installedPlugins = [];
+      return;
+    }
+    const next: InstalledPlugin[] = [];
+    for (const { manifestJson } of stored) {
+      let manifest: PluginManifest;
+      try {
+        const parsed = parseManifestJson(manifestJson);
+        if (!parsed.ok) throw new Error(parsed.issues[0]?.message ?? 'invalid manifest');
+        manifest = parsed.manifest;
+      } catch (err) {
+        // Persisted JSON has rotted somehow; surface but don't
+        // crash — the entry stays so the user can see it.
+        next.push({
+          manifest: { id: 'unknown', name: 'Unknown', version: '0.0.0', kind: 'effect',
+            wasm: '', wasmIntegrity: '', params: [] },
+          handle: 0,
+          loadError: `bad manifest JSON: ${(err as Error).message}`,
+        });
+        continue;
+      }
+      try {
+        const wasmResp = await fetch(manifest.wasm);
+        if (!wasmResp.ok) throw new Error(`fetch ${manifest.wasm}: ${wasmResp.status}`);
+        const wasmBytes = new Uint8Array(await wasmResp.arrayBuffer());
+        const got = `sha256-${await wasmSha256(wasmBytes)}`;
+        if (got !== manifest.wasmIntegrity) {
+          throw new Error(`integrity drift: expected ${manifest.wasmIntegrity}, got ${got}`);
+        }
+        const handle = await audio.postLoadWasmPlugin(wasmBytes, {
+          maxBlockSize: 256,
+          inChannels: manifest.kind === 'instrument' ? 0 : 1,
+          outChannels: 1,
+        });
+        next.push({ manifest, handle });
+      } catch (err) {
+        next.push({ manifest, handle: 0, loadError: (err as Error).message });
+      }
+    }
+    installedPlugins = next;
+    bridge?.rebuild();
+  }
+
+  /// Register the manifestId → handle resolver with engine-bridge
+  /// every time `installedPlugins` changes — the bridge's snapshot
+  /// encoder uses this to convert persisted slot manifestIds back
+  /// to live handles.
+  $effect(() => {
+    const map = new Map<string, number>();
+    for (const p of installedPlugins) {
+      if (p.handle > 0 && !p.loadError) map.set(p.manifest.id, p.handle);
+    }
+    setHandleForManifestLookup((id) => map.get(id));
+  });
 
   // Phase 7 M2 follow-up — when the user pops the mixer into a
   // satellite window, hide the in-root drawer so the same control
@@ -445,9 +518,20 @@
     exposeBridgeHandle(bridge);
   }
 
-  const ready = bootProject(initialProject.docName);
+  const ready = (async () => {
+    await bootProject(initialProject.docName);
+    await reloadInstalledPlugins();
+  })();
 
   async function tearDownCurrent(): Promise<void> {
+    // Phase-8 M5b — unload session plugins from the worklet so a
+    // freshly-loaded project starts from a clean plugin registry.
+    for (const p of installedPlugins) {
+      if (p.handle > 0) {
+        try { await audio.postUnloadWasmPlugin(p.handle); } catch { /* idempotent */ }
+      }
+    }
+    installedPlugins = [];
     pipController?.destroy();
     pipController = null;
     rootSyncHandle?.destroy();
@@ -492,6 +576,7 @@
     inDemo = false;
     selectedTrackIdx = 0;
     await bootProject(next.docName);
+    await reloadInstalledPlugins();
   }
 
   /// Phase-8 M6 — load the Bitcrusher example plugin into the audio
@@ -502,28 +587,25 @@
   /// on — the demo is still playable, just without the crusher.
   async function enrichDemoSongWithBitcrusher(): Promise<void> {
     if (!project) return;
-    try {
-      const resp = await fetch('/example-plugins/wasm_bitcrusher.wasm');
-      if (!resp.ok) return;
-      const bytes = new Uint8Array(await resp.arrayBuffer());
-      const handle = await audio.postLoadWasmPlugin(bytes, {
-        maxBlockSize: 256,
-        inChannels: 1,
-        outChannels: 1,
-      });
-      const bassIdx = 1; // demo seed layout: 0=Lead, 1=Bass, 2=Reverb, 3=Drums
-      addWasmInsert(project, bassIdx, handle);
-      const trackId = project.tracks.get(bassIdx);
-      const track = project.trackById.get(trackId);
-      const inserts = track?.get('inserts') as { length?: number } | undefined;
-      const slotIdx = (inserts?.length ?? 0) - 1;
-      if (slotIdx >= 0) {
-        setInsertParam(project, bassIdx, slotIdx, 0, 8);    // 8-bit (subtle)
-        setInsertParam(project, bassIdx, slotIdx, 1, 1);    // no SRR
-        setInsertParam(project, bassIdx, slotIdx, 2, 0.35); // 35% wet
-      }
-    } catch (err) {
+    // Install via the same picker path so the demo's Y.Doc carries
+    // a stable installedPlugins entry — if the user forks the demo
+    // via "Save as new project", the bitcrusher survives the fork
+    // and re-loads on next boot.
+    const err = await installPluginFromUrl('/example-plugins/wasm_bitcrusher.json');
+    if (err) {
       console.warn('demo song bitcrusher enrichment failed:', err);
+      return;
+    }
+    const bassIdx = 1; // demo seed layout: 0=Lead, 1=Bass, 2=Reverb, 3=Drums
+    addWasmInsertByManifest(project, bassIdx, 'com.example.bitcrusher');
+    const trackId = project.tracks.get(bassIdx);
+    const track = project.trackById.get(trackId);
+    const inserts = track?.get('inserts') as { length?: number } | undefined;
+    const slotIdx = (inserts?.length ?? 0) - 1;
+    if (slotIdx >= 0) {
+      setInsertParam(project, bassIdx, slotIdx, 0, 8);    // 8-bit (subtle)
+      setInsertParam(project, bassIdx, slotIdx, 1, 1);    // no SRR
+      setInsertParam(project, bassIdx, slotIdx, 2, 0.35); // 35% wet
     }
   }
 
@@ -568,6 +650,10 @@
     demoSaveAsOpen = false;
     selectedTrackIdx = 0;
     await bootProject(info.docName);
+    // The forked project carries the demo's meta.installedPlugins;
+    // re-register so the bitcrusher (and any other installed
+    // plugins) come back to life in the saved copy.
+    await reloadInstalledPlugins();
   }
 
   // Phase-6 M5: tick-publishing loop. Runs while transport is on,
@@ -894,6 +980,14 @@
           /// Phase-8 M1 — schema validator backdoor. Pure function;
           /// safe to expose. Used by tests/phase-8-manifest.spec.ts.
           parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
+          /// Phase-8 M5b — test backdoor: write a manifest into
+          /// `meta.installedPlugins` directly. Used by the failure
+          /// spec to inject a manifest with a bogus wasm URL so
+          /// reload-time re-registration fails predictably.
+          _testRecordInstalledPlugin: (manifestId: string, manifestJson: string) => {
+            if (!project) return;
+            recordInstalledPlugin(project, manifestId, manifestJson);
+          },
           /// Phase-8 M3b — load a third-party WASM plugin into the
           /// worklet and return the handle. Used by the e2e test;
           /// in production the picker UI (M5) will drive this with

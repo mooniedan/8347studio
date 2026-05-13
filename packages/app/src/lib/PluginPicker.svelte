@@ -14,7 +14,13 @@
 
   export interface InstalledPlugin {
     manifest: PluginManifest;
+    /** Worklet-assigned handle. 0 means "not registered" — either
+     *  the plugin failed to load on boot, or registration is still
+     *  in flight. */
     handle: number;
+    /** Set when boot-time re-registration failed (fetch, integrity,
+     *  manifest invalid). Surfaces as a red badge on the card. */
+    loadError?: string;
   }
 
   let {
@@ -129,10 +135,18 @@
       {:else}
         <div class="grid" data-testid="plugin-picker-installed">
           {#each installed as p (p.manifest.id)}
-            <article class="card" data-testid="plugin-card-{p.manifest.id}">
+            <article
+              class="card"
+              class:card--failed={!!p.loadError}
+              data-testid="plugin-card-{p.manifest.id}"
+            >
               <header class="card-head">
                 <span class="card-name">{p.manifest.name}</span>
-                <span class="kind">{p.manifest.kind}</span>
+                {#if p.loadError}
+                  <span class="failed" data-testid="plugin-card-failed-{p.manifest.id}">FAILED</span>
+                {:else}
+                  <span class="kind">{p.manifest.kind}</span>
+                {/if}
               </header>
               <p class="meta">
                 <span class="mono">{p.manifest.id}</span>
@@ -143,10 +157,17 @@
                   <span>{p.manifest.license}</span>
                 {/if}
               </p>
-              <p class="meta dim">{paramSummary(p.manifest)}</p>
+              {#if p.loadError}
+                <p class="error-inline" data-testid="plugin-card-error-{p.manifest.id}">
+                  {p.loadError}
+                </p>
+              {:else}
+                <p class="meta dim">{paramSummary(p.manifest)}</p>
+              {/if}
               <footer class="card-foot">
                 <Button
                   variant="primary"
+                  disabled={!!p.loadError || p.handle === 0}
                   testId="plugin-add-{p.manifest.id}"
                   onclick={() => onAddToTrack(p)}
                 >Add to {selectedTrackName}</Button>
@@ -270,6 +291,28 @@
     color: var(--accent);
     text-transform: uppercase;
     letter-spacing: 0.08em;
+  }
+  .failed {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--accent-fg);
+    background: var(--accent);
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .card--failed {
+    border-color: var(--accent-lo);
+    background: rgba(226, 52, 45, 0.06);
+  }
+  .error-inline {
+    margin: 0;
+    color: var(--accent-hi);
+    font-size: var(--text-10);
+    font-family: var(--font-mono);
+    line-height: 1.5;
+    word-break: break-word;
   }
   .meta {
     margin: 0;

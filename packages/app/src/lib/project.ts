@@ -1300,6 +1300,11 @@ export function addInsert(p: Project, trackIdx: number, kind: InsertPluginId): v
 /// first, then pass the returned handle here. Stored alongside
 /// `pluginId='wasm'` so the engine-bridge encoder emits the
 /// `InsertKind::Wasm { handle }` snapshot variant.
+///
+/// This direct-handle path is the runtime-only variant — handles
+/// don't survive reload. The picker path (`addWasmInsertByManifest`)
+/// also writes a stable `manifestId` so reloads can rebind to a
+/// fresh handle.
 export function addWasmInsert(p: Project, trackIdx: number, handle: number): void {
   const arr = trackInsertArr(p, trackIdx);
   if (!arr) return;
@@ -1310,6 +1315,69 @@ export function addWasmInsert(p: Project, trackIdx: number, handle: number): voi
     slot.set('bypass', false);
     slot.set('params', new Y.Map<unknown>());
     arr.push([slot]);
+  });
+}
+
+/// Phase-8 M5b — picker entry point. Stores the slot with a stable
+/// manifest id, so on reload the engine-bridge can look up the
+/// freshly-registered handle for the same plugin. The handle itself
+/// is the runtime-only resolution; manifestId is what survives.
+export function addWasmInsertByManifest(
+  p: Project,
+  trackIdx: number,
+  manifestId: string,
+): void {
+  const arr = trackInsertArr(p, trackIdx);
+  if (!arr) return;
+  p.doc.transact(() => {
+    const slot = new Y.Map<unknown>();
+    slot.set('pluginId', 'wasm');
+    slot.set('manifestId', manifestId);
+    slot.set('bypass', false);
+    slot.set('params', new Y.Map<unknown>());
+    arr.push([slot]);
+  });
+}
+
+// ---- Phase-8 M5b — installed plugin registry (persisted) ------------
+//
+// `meta.installedPlugins` is a Y.Map<manifestId, JSON-encoded
+// PluginManifest>. JSON stringification keeps the value a flat
+// blob the picker round-trips; we don't need Y.Doc-level partial
+// edits on individual manifest fields.
+
+function installedPluginsMap(p: Project): Y.Map<unknown> {
+  let m = p.meta.get('installedPlugins') as Y.Map<unknown> | undefined;
+  if (!m) {
+    m = new Y.Map<unknown>();
+    p.meta.set('installedPlugins', m);
+  }
+  return m;
+}
+
+export function recordInstalledPlugin(
+  p: Project,
+  manifestId: string,
+  manifestJson: string,
+): void {
+  p.doc.transact(() => {
+    installedPluginsMap(p).set(manifestId, manifestJson);
+  });
+}
+
+export function listInstalledPlugins(p: Project): { id: string; manifestJson: string }[] {
+  const m = p.meta.get('installedPlugins') as Y.Map<unknown> | undefined;
+  if (!m) return [];
+  const out: { id: string; manifestJson: string }[] = [];
+  m.forEach((v, k) => {
+    if (typeof v === 'string') out.push({ id: k, manifestJson: v });
+  });
+  return out;
+}
+
+export function forgetInstalledPlugin(p: Project, manifestId: string): void {
+  p.doc.transact(() => {
+    installedPluginsMap(p).delete(manifestId);
   });
 }
 
