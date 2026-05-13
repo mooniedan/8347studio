@@ -276,14 +276,10 @@ impl Engine {
 
     pub fn set_bpm(&mut self, bpm: f32) {
         self.tempo_map.set_bpm(bpm);
-        // Phase-1 carry-over: per-track Sequencer keeps its own
-        // samples_per_step counter while M5 hasn't moved scheduling out
-        // of the instrument. Propagate the BPM so the two stay aligned.
-        for t in self.tracks.iter_mut() {
-            if let Some(seq) = t.instrument.as_any_mut().downcast_mut::<Sequencer>() {
-                seq.set_bpm(bpm);
-            }
-        }
+        // The Sequencer used to keep its own samples-per-step counter;
+        // it's now tick-driven via `advance_to_tick` so BPM is implicit
+        // in the engine's tick clock — no per-instrument propagation
+        // needed.
     }
 
     pub fn apply_event(&mut self, ev: Event) {
@@ -382,6 +378,7 @@ impl Engine {
                     && next_tick >= lr.end_tick
                 {
                     self.fire_track_schedulers(prev_tick, lr.end_tick);
+                    self.advance_step_seqs(prev_tick, lr.end_tick);
                     for t in self.tracks.iter_mut() {
                         t.instrument
                             .handle_event(crate::plugin::PluginEvent::AllNotesOff);
@@ -396,12 +393,15 @@ impl Engine {
                     let secs = wrapped as f64 / ticks_per_sec.max(1e-6);
                     self.sample_pos = (secs * self.sample_rate as f64) as u64;
                     self.fire_track_schedulers(lr.start_tick, wrapped);
+                    self.advance_step_seqs(lr.start_tick, wrapped);
                     next_tick = wrapped;
                 } else {
                     self.fire_track_schedulers(prev_tick, next_tick);
+                    self.advance_step_seqs(prev_tick, next_tick);
                 }
             } else {
                 self.fire_track_schedulers(prev_tick, next_tick);
+                self.advance_step_seqs(prev_tick, next_tick);
             }
         } else {
             self.fire_track_schedulers(prev_tick, next_tick);
@@ -539,6 +539,20 @@ impl Engine {
                 continue;
             }
             sched.fire_for_block(prev_tick, next_tick, &mut *self.tracks[i].instrument);
+        }
+    }
+
+    /// Drive every Sequencer instrument's step pointer from the engine's
+    /// tick clock. Eliminates self-clocking drift that used to accumulate
+    /// against the piano-roll clip scheduler.
+    fn advance_step_seqs(&mut self, prev_tick: u64, next_tick: u64) {
+        if !self.playing {
+            return;
+        }
+        for t in self.tracks.iter_mut() {
+            if let Some(seq) = t.instrument.as_any_mut().downcast_mut::<Sequencer>() {
+                seq.advance_for_window(prev_tick, next_tick);
+            }
         }
     }
 

@@ -109,16 +109,23 @@ impl Voice {
     }
 }
 
+/// Default ticks per 1/16 step at PPQ=960. The engine drives the
+/// step pointer from its tick clock, so this matches the StepSeq
+/// clip's `stepTicks` field in project.ts.
+pub const DEFAULT_TICKS_PER_STEP: u32 = 240;
+
 pub struct Sequencer {
-    sample_rate: f32,
     voices: [Voice; MAX_VOICES],
     next_trigger_tick: u64,
     /// Per-step bitmask of active notes; bit k = MIDI note LOW_MIDI + k.
     steps: [u32; STEPS as usize],
     current_step: u32,
-    samples_into_step: u32,
-    samples_per_step: u32,
+    /// Ticks per step (PPQ-relative). Settable; default 240 (1/16 at PPQ=960).
+    ticks_per_step: u32,
     playing: bool,
+    /// Force a reconcile on the next `advance_to_tick`. Set when
+    /// transport starts so step-0 fires even when tick is already 0.
+    needs_initial_reconcile: bool,
 }
 
 fn midi_to_hz(m: f32) -> f32 {
@@ -128,23 +135,15 @@ fn midi_to_hz(m: f32) -> f32 {
 impl Sequencer {
     pub fn new(sample_rate: f32) -> Self {
         let voices = core::array::from_fn(|_| Voice::new(sample_rate));
-        let mut s = Self {
-            sample_rate,
+        Self {
             voices,
             next_trigger_tick: 1,
             steps: [0; STEPS as usize],
             current_step: 0,
-            samples_into_step: 0,
-            samples_per_step: 0,
+            ticks_per_step: DEFAULT_TICKS_PER_STEP,
             playing: false,
-        };
-        s.set_bpm(120.0);
-        s
-    }
-
-    pub fn set_bpm(&mut self, bpm: f32) {
-        let bpm = bpm.max(20.0).min(300.0);
-        self.samples_per_step = (self.sample_rate * 60.0 / bpm / 4.0) as u32;
+            needs_initial_reconcile: false,
+        }
     }
 
     /// Replace active notes at step `i` with `mask`.
@@ -155,17 +154,66 @@ impl Sequencer {
         }
     }
 
+    pub fn set_ticks_per_step(&mut self, t: u32) {
+        if t > 0 {
+            self.ticks_per_step = t;
+        }
+    }
+
     pub fn set_playing(&mut self, on: bool) {
         self.playing = on;
         if !on {
             self.current_step = 0;
-            self.samples_into_step = 0;
             // Release any sustained voices so they fade instead of holding forever.
             for v in self.voices.iter_mut() {
                 if v.env.is_held() {
                     v.env.release();
                 }
             }
+        } else {
+            // Re-arm initial reconcile so step-0 (or whatever step
+            // the engine's tick maps to on first block) fires.
+            self.needs_initial_reconcile = true;
+        }
+    }
+
+    /// Engine drives the step pointer from its tick clock. Called every
+    /// audio block with the tick range covered by the block. Fires
+    /// `reconcile_step` for every step boundary `k * ticks_per_step`
+    /// that falls in the half-open interval `[prev_tick, next_tick)`.
+    /// Eliminates the truncation drift that the old self-clocking
+    /// `samples_per_step` counter accumulated relative to piano-roll
+    /// tracks (~7 samples/bar at 48 kHz / 110 BPM).
+    pub fn advance_for_window(&mut self, prev_tick: u64, next_tick: u64) {
+        if !self.playing {
+            return;
+        }
+        let s = self.ticks_per_step as u64;
+        // Force-fire the floor-step at prev_tick on the first call after
+        // set_playing(true), even if no boundary falls inside the window
+        // (covers the transport-resume-mid-step case).
+        let mut t = if self.needs_initial_reconcile {
+            let step = ((prev_tick / s) % STEPS as u64) as u32;
+            self.current_step = step;
+            let mask = self.steps[step as usize];
+            self.reconcile_step(mask);
+            self.needs_initial_reconcile = false;
+            // Next regular boundary to consider is strictly after prev_tick.
+            (prev_tick / s + 1) * s
+        } else {
+            // First boundary at or after prev_tick.
+            ((prev_tick + s - 1) / s) * s
+        };
+        // Safety cap: one full lap should be more than any realistic
+        // audio block. Prevents pathological runaway on huge windows.
+        let mut count = 0usize;
+        while t < next_tick && count <= STEPS as usize {
+            let step = ((t / s) % STEPS as u64) as u32;
+            let mask = self.steps[step as usize];
+            self.reconcile_step(mask);
+            self.current_step = step;
+            t = t.saturating_add(s);
+            count += 1;
         }
     }
 
@@ -237,18 +285,9 @@ impl Sequencer {
     }
 
     pub fn process(&mut self, buf: &mut [f32]) {
+        // Audio-only: step transitions are driven by `advance_to_tick`
+        // from the engine. This loop just renders voices.
         for s in buf.iter_mut() {
-            if self.playing {
-                if self.samples_into_step == 0 {
-                    let mask = self.steps[self.current_step as usize];
-                    self.reconcile_step(mask);
-                }
-                self.samples_into_step += 1;
-                if self.samples_into_step >= self.samples_per_step {
-                    self.samples_into_step = 0;
-                    self.current_step = (self.current_step + 1) % STEPS;
-                }
-            }
             let mut mix = 0.0;
             for v in self.voices.iter_mut() {
                 mix += v.osc.next_sample() * v.env.next();
@@ -298,6 +337,19 @@ mod tests {
         1 << (midi - LOW_MIDI)
     }
 
+    // Helper: cover the window leading into `step` so the boundary fires,
+    // then render audio. Caller treats each call as "step `step` just
+    // started".
+    fn render_at_step(seq: &mut Sequencer, step: u32, frames: usize) -> alloc::vec::Vec<f32> {
+        let s = DEFAULT_TICKS_PER_STEP as u64;
+        let prev = step.saturating_sub(if step == 0 { 0 } else { 1 }) as u64 * s;
+        let next = step as u64 * s + 1;
+        seq.advance_for_window(prev, next);
+        let mut buf = alloc::vec![0.0f32; frames];
+        seq.process(&mut buf);
+        buf
+    }
+
     #[test]
     fn silent_when_stopped() {
         let mut seq = Sequencer::new(48_000.0);
@@ -314,8 +366,7 @@ mod tests {
         let mut seq = Sequencer::new(48_000.0);
         seq.set_step_mask(0, note_bit(69));
         seq.set_playing(true);
-        let mut buf = [0.0f32; 4800];
-        seq.process(&mut buf);
+        let buf = render_at_step(&mut seq, 0, 4800);
         let peak = buf.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
         assert!(peak > 0.05, "peak was {peak}");
         assert!(buf.iter().all(|s| s.is_finite()));
@@ -326,15 +377,13 @@ mod tests {
         let mut single = Sequencer::new(48_000.0);
         single.set_step_mask(0, note_bit(60));
         single.set_playing(true);
-        let mut a = [0.0f32; 4800];
-        single.process(&mut a);
+        let a = render_at_step(&mut single, 0, 4800);
         let peak_single = a.iter().cloned().fold(0.0f32, |x, y| x.max(y.abs()));
 
         let mut chord = Sequencer::new(48_000.0);
         chord.set_step_mask(0, note_bit(60) | note_bit(64) | note_bit(67));
         chord.set_playing(true);
-        let mut b = [0.0f32; 4800];
-        chord.process(&mut b);
+        let b = render_at_step(&mut chord, 0, 4800);
         let peak_chord = b.iter().cloned().fold(0.0f32, |x, y| x.max(y.abs()));
 
         assert!(b.iter().all(|s| s.is_finite()));
@@ -350,8 +399,7 @@ mod tests {
         // All 25 notes on step 0 — exceeds MAX_VOICES, forces stealing.
         seq.set_step_mask(0, (1 << NOTES) - 1);
         seq.set_playing(true);
-        let mut buf = vec![0.0f32; 9600];
-        seq.process(&mut buf);
+        let buf = render_at_step(&mut seq, 0, 9600);
         assert!(buf.iter().all(|s| s.is_finite()));
         let held: usize = seq.voices.iter().filter(|v| v.env.is_held()).count();
         assert!(held <= MAX_VOICES);
@@ -365,10 +413,10 @@ mod tests {
         seq.set_step_mask(1, mask);
         seq.set_step_mask(2, mask);
         seq.set_playing(true);
-        // Play across all three step boundaries.
-        let samples = seq.samples_per_step as usize * 3 + 100;
-        let mut buf = vec![0.0f32; samples];
-        seq.process(&mut buf);
+        // Advance through three step boundaries.
+        let _ = render_at_step(&mut seq, 0, 100);
+        let _ = render_at_step(&mut seq, 1, 100);
+        let _ = render_at_step(&mut seq, 2, 100);
         // next_trigger_tick starts at 1 and increments on each trigger.
         // Three sustained steps should cause exactly one trigger.
         assert_eq!(seq.next_trigger_tick, 2);
@@ -380,9 +428,8 @@ mod tests {
         seq.set_step_mask(0, note_bit(60));
         seq.set_step_mask(1, note_bit(62));
         seq.set_playing(true);
-        let samples = seq.samples_per_step as usize + 100;
-        let mut buf = vec![0.0f32; samples];
-        seq.process(&mut buf);
+        let _ = render_at_step(&mut seq, 0, 100);
+        let _ = render_at_step(&mut seq, 1, 100);
         assert_eq!(seq.next_trigger_tick, 3);
     }
 
@@ -392,10 +439,9 @@ mod tests {
         seq.set_step_mask(0, note_bit(60));
         // step 1 is empty
         seq.set_playing(true);
-        // Two full steps + release time: release is 80ms (~3840 samples).
-        let samples = seq.samples_per_step as usize * 2 + 4000;
-        let mut buf = vec![0.0f32; samples];
-        seq.process(&mut buf);
+        let _ = render_at_step(&mut seq, 0, 1000);
+        // Step into an empty mask: held voice should release.
+        let _ = render_at_step(&mut seq, 1, 4000);
         assert!(
             seq.voices.iter().all(|v| v.env.is_idle()),
             "expected all voices idle after release tail"
@@ -409,9 +455,8 @@ mod tests {
         seq.set_step_mask(0, note_bit(60) | note_bit(64) | note_bit(67));
         seq.set_step_mask(1, note_bit(60) | note_bit(65) | note_bit(67));
         seq.set_playing(true);
-        let samples = seq.samples_per_step as usize + 100;
-        let mut buf = vec![0.0f32; samples];
-        seq.process(&mut buf);
+        let _ = render_at_step(&mut seq, 0, 100);
+        let _ = render_at_step(&mut seq, 1, 100);
         // Initial triggers: 3 notes → tick goes 1→4. At step 1 boundary,
         // only F is new, one more trigger → tick should be 5.
         assert_eq!(seq.next_trigger_tick, 5);
@@ -424,23 +469,37 @@ mod tests {
     }
 
     #[test]
-    fn current_step_advances_while_playing() {
+    fn current_step_follows_engine_tick() {
+        let s = DEFAULT_TICKS_PER_STEP as u64;
         let mut seq = Sequencer::new(48_000.0);
         seq.set_playing(true);
+        // First block from 0 covering one step's worth: fires step 0.
+        seq.advance_for_window(0, s);
         assert_eq!(seq.current_step(), 0);
-        let mut buf = vec![0.0f32; seq.samples_per_step as usize + 1];
-        seq.process(&mut buf);
+        // Next block covers [s, 2s): fires step 1.
+        seq.advance_for_window(s, 2 * s);
         assert_eq!(seq.current_step(), 1);
+        // Skip forward — STEPS boundaries crossed; we wrap back to step 0.
+        seq.advance_for_window(2 * s, STEPS as u64 * s + 1);
+        assert_eq!(seq.current_step(), 0);
         seq.set_playing(false);
         assert_eq!(seq.current_step(), -1);
+    }
+
+    #[test]
+    fn advance_when_stopped_is_a_noop() {
+        let mut seq = Sequencer::new(48_000.0);
+        seq.set_step_mask(0, note_bit(60));
+        seq.advance_for_window(0, DEFAULT_TICKS_PER_STEP as u64);
+        // No reconcile because not playing — no triggers should have fired.
+        assert_eq!(seq.next_trigger_tick, 1);
     }
 
     #[test]
     fn empty_pattern_stays_silent() {
         let mut seq = Sequencer::new(48_000.0);
         seq.set_playing(true);
-        let mut buf = [0.0f32; 4800];
-        seq.process(&mut buf);
+        let buf = render_at_step(&mut seq, 0, 4800);
         assert!(buf.iter().all(|s| *s == 0.0));
     }
 }
