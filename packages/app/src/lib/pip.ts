@@ -110,6 +110,35 @@ export function createPipController(bindings: PipBindings): PipController {
 /// Phase-8 follow-up — Document PIP for the user guide. Same plumbing
 /// as the transport PIP (mount a Svelte component inside a popped-out
 /// PIP window), just a different component + window size.
+///
+/// Unlike TransportPipPanel (whose styles are all `:global`), DocsPanel
+/// uses Svelte's scoped styles — the generated `<style>` blocks live
+/// in the *main* document's head and don't follow the component into
+/// the PIP window's document. We copy every stylesheet from the host
+/// document into the PIP doc on open; without that the nav stacks on
+/// top of the body because the grid layout is missing.
+function copyStyleSheetsIntoPip(target: Document) {
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      const rules = Array.from(sheet.cssRules)
+        .map((rule) => rule.cssText)
+        .join('\n');
+      const style = target.createElement('style');
+      style.textContent = rules;
+      target.head.appendChild(style);
+    } catch {
+      // Cross-origin / unreadable sheets — link them by href instead.
+      if (sheet.href) {
+        const link = target.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = sheet.href;
+        if (sheet.media.mediaText) link.media = sheet.media.mediaText;
+        target.head.appendChild(link);
+      }
+    }
+  }
+}
+
 export function createDocsPipController(): PipController {
   let win: Window | null = null;
   let mounted: ReturnType<typeof mount> | null = null;
@@ -128,16 +157,19 @@ export function createDocsPipController(): PipController {
       if (win) return;
       const dpip = (window as WindowWithPip).documentPictureInPicture;
       if (!dpip) throw new Error('Document Picture-in-Picture not supported');
-      win = await dpip.requestWindow({ width: 520, height: 720 });
+      // 880 × 760 fits the 220px nav rail + comfortable prose body
+      // (~640px content area at default font size).
+      win = await dpip.requestWindow({ width: 880, height: 760 });
+      copyStyleSheetsIntoPip(win.document);
       const style = win.document.createElement('style');
       style.textContent = `
-        @import url('${window.location.origin}/src/styles/tokens.css');
         html, body {
           margin: 0;
           background: var(--bg-1, #0e0f12);
           color: var(--fg-1, #c8ccd4);
           font-family: var(--font-sans, system-ui, sans-serif);
           height: 100vh;
+          overflow: hidden;
         }
         #docs-root { height: 100vh; }
       `;
