@@ -22,6 +22,19 @@ async function openDemo(page: Page) {
       page.evaluate(() => (window as any).__project?.projectName ?? null),
     )
     .toBe('Demo Song');
+  // The demo's async enrichment installs the bitcrusher onto the
+  // bass and arms the dirty-watcher after the writes settle. Wait
+  // for the watcher to be armed before driving user interactions,
+  // otherwise the "first edit dirties the demo" promise races
+  // against the enrichment writes.
+  await expect
+    .poll(async () => {
+      const tracks = await page.evaluate(() =>
+        (window as any).__bridge.inspectTracks(),
+      );
+      return tracks[1]?.inserts.map((i: { kind: string }) => i.kind) ?? [];
+    })
+    .toContain('wasm');
 }
 
 test.describe('Demo Song slot — ephemeral + save-as', () => {

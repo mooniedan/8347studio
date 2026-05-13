@@ -8,6 +8,7 @@
     type Project,
     type PianoRollNote,
     getPianoRollClipForTrack,
+    getTrackPluginId,
     readPianoRollNotes,
     addPianoRollNote,
     removePianoRollNoteAt,
@@ -15,14 +16,51 @@
 
   const { project, trackIdx }: { project: Project; trackIdx: number } = $props();
 
-  // C3..C5 inclusive, same range as the step grid for visual continuity.
-  const HIGH = LOW_MIDI + 24; // 72 = C5
-  const NOTES = HIGH - LOW_MIDI + 1;
-  const rows = Array.from({ length: NOTES }, (_, r) => HIGH - r);
   const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const BLACK = new Set([1, 3, 6, 8, 10]);
   const isBlack = (m: number) => BLACK.has(((m % 12) + 12) % 12);
-  const name = (m: number) => `${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
+  const noteName = (m: number) => `${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
+
+  /// Drum-kit pitch map — General-MIDI subset that the first-party
+  /// drumkit plugin responds to. Renders top-down (highest pitch at
+  /// the top, like a melodic piano-roll).
+  const DRUM_ROWS: { midi: number; label: string }[] = [
+    { midi: 46, label: 'Open Hat' },
+    { midi: 42, label: 'Closed Hat' },
+    { midi: 39, label: 'Clap' },
+    { midi: 38, label: 'Snare' },
+    { midi: 36, label: 'Kick' },
+  ];
+
+  // svelte-ignore state_referenced_locally — initial-capture is
+  // immediately re-synced by the $effect below.
+  let pluginId = $state(getTrackPluginId(project, trackIdx));
+  $effect(() => {
+    const idx = trackIdx;
+    const refresh = () => { pluginId = getTrackPluginId(project, idx); };
+    refresh();
+    project.trackById.observeDeep(refresh);
+    project.tracks.observe(refresh);
+    return () => {
+      project.trackById.unobserveDeep(refresh);
+      project.tracks.unobserve(refresh);
+    };
+  });
+
+  // C3..C5 inclusive for melodic tracks; drum-kit pitches when the
+  // track holds the drumkit plugin (otherwise the user can't see or
+  // edit the notes — drum pitches sit a whole octave below C3).
+  const rowDefs = $derived.by((): { midi: number; label: string; isAccent: boolean }[] => {
+    if (pluginId === 'builtin:drumkit') {
+      return DRUM_ROWS.map((r) => ({ midi: r.midi, label: r.label, isAccent: false }));
+    }
+    const HIGH = LOW_MIDI + 24; // 72 = C5
+    const N = HIGH - LOW_MIDI + 1;
+    return Array.from({ length: N }, (_, r) => {
+      const m = HIGH - r;
+      return { midi: m, label: noteName(m), isAccent: isBlack(m) };
+    });
+  });
 
   let notes = $state<PianoRollNote[]>(untrack(() => snapshotNotes()));
   // Column index (0..STEPS_PER_CLIP-1) currently under the playhead,
@@ -96,30 +134,30 @@
   });
 </script>
 
-<div class="wrap">
+<div class="wrap" class:drum-roll={pluginId === 'builtin:drumkit'}>
   <div class="roll">
     <div class="keys">
-      {#each rows as midi}
-        <div class="key" class:black={isBlack(midi)}>{name(midi)}</div>
+      {#each rowDefs as row (row.midi)}
+        <div class="key" class:black={row.isAccent} title="MIDI {row.midi}">{row.label}</div>
       {/each}
     </div>
     <div
       class="grid"
       data-testid={`piano-grid-${trackIdx}`}
-      style="grid-template-rows: repeat({NOTES}, 1fr); grid-template-columns: repeat({STEPS_PER_CLIP}, 1fr);"
+      style="grid-template-rows: repeat({rowDefs.length}, 1fr); grid-template-columns: repeat({STEPS_PER_CLIP}, 1fr);"
     >
-      {#each rows as midi, r}
+      {#each rowDefs as row, r (row.midi)}
         {#each Array(STEPS_PER_CLIP) as _, c}
           <button
             class="cell"
-            class:black-row={isBlack(midi)}
+            class:black-row={row.isAccent}
             class:beat={c % 4 === 0}
-            class:on={Boolean(noteAt(c, midi))}
+            class:on={Boolean(noteAt(c, row.midi))}
             class:playhead={c === playheadCol}
             style="grid-row: {r + 1}; grid-column: {c + 1};"
-            data-testid={`piano-cell-${midi}-${c}`}
-            onclick={() => toggleCell(c, midi)}
-            aria-label={`${name(midi)} ${c + 1}`}
+            data-testid={`piano-cell-${row.midi}-${c}`}
+            onclick={() => toggleCell(c, row.midi)}
+            aria-label={`${row.label} ${c + 1}`}
           ></button>
         {/each}
       {/each}
@@ -136,6 +174,22 @@
     display: grid;
     grid-template-columns: 32px 1fr;
     gap: 4px;
+  }
+  /* Drum view needs more room for "Closed Hat" / "Open Hat" labels
+     and benefits from taller rows since there's only 5 of them. */
+  .drum-roll .roll {
+    grid-template-columns: 80px 1fr;
+  }
+  .drum-roll .grid {
+    aspect-ratio: 16 / 5;
+  }
+  .drum-roll .key {
+    font-size: 10px;
+    background: #20232a;
+    color: #c8ccd4;
+    border-bottom: 1px solid #1a1c21;
+    padding: 0 6px;
+    text-transform: none;
   }
   .keys {
     display: grid;

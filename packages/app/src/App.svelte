@@ -588,14 +588,23 @@
   async function enrichDemoSongWithBitcrusher(): Promise<void> {
     if (!project) return;
     // Install via the same picker path so the demo's Y.Doc carries
-    // a stable installedPlugins entry — if the user forks the demo
-    // via "Save as new project", the bitcrusher survives the fork
-    // and re-loads on next boot.
-    const err = await installPluginFromUrl('/example-plugins/wasm_bitcrusher.json');
-    if (err) {
-      console.warn('demo song bitcrusher enrichment failed:', err);
+    // stable meta.installedPlugins entries — if the user forks the
+    // demo via "Save as new project", the plugins survive the fork
+    // and re-load on next boot.
+    const bcErr = await installPluginFromUrl('/example-plugins/wasm_bitcrusher.json');
+    if (bcErr) {
+      console.warn('demo song bitcrusher install failed:', bcErr);
       return;
     }
+    // Pre-install the gain plugin so the Installed tab has more
+    // than one entry on first open — shows the registry / picker
+    // pipeline is real, not a one-off for the bitcrusher.
+    const gainErr = await installPluginFromUrl('/example-plugins/wasm_gain_plugin.json');
+    if (gainErr) {
+      console.warn('demo song gain install failed:', gainErr);
+      // non-fatal — keep going with the bitcrusher attach
+    }
+
     const bassIdx = 1; // demo seed layout: 0=Lead, 1=Bass, 2=Reverb, 3=Drums
     addWasmInsertByManifest(project, bassIdx, 'com.example.bitcrusher');
     const trackId = project.tracks.get(bassIdx);
@@ -603,9 +612,18 @@
     const inserts = track?.get('inserts') as { length?: number } | undefined;
     const slotIdx = (inserts?.length ?? 0) - 1;
     if (slotIdx >= 0) {
-      setInsertParam(project, bassIdx, slotIdx, 0, 8);    // 8-bit (subtle)
+      setInsertParam(project, bassIdx, slotIdx, 0, 8);    // 8-bit baseline
       setInsertParam(project, bassIdx, slotIdx, 1, 1);    // no SRR
-      setInsertParam(project, bassIdx, slotIdx, 2, 0.35); // 35% wet
+
+      // Automate the mix so the wasm plugin is audibly demonstrated
+      // — wet ramps up across the 4-bar loop, then drops back. Same
+      // shape as the lead's filter sweep, on a different surface.
+      const STEP_TICKS_LOCAL = 240;
+      const STEPS = 64; // PROG_STEPS from the seed
+      const total = STEPS * STEP_TICKS_LOCAL;
+      addAutomationPoint(project, bassIdx, 'insert', slotIdx, 2, { tick: 0,        value: 0.10 });
+      addAutomationPoint(project, bassIdx, 'insert', slotIdx, 2, { tick: total / 2, value: 0.7 });
+      addAutomationPoint(project, bassIdx, 'insert', slotIdx, 2, { tick: total - 1, value: 0.25 });
     }
   }
 

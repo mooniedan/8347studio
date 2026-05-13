@@ -64,4 +64,36 @@ test.describe('phase-8 M2 — drumkit plugin', () => {
     // The plugin-panel mounts when the new track is selected.
     await expect(page.getByTestId('inspector-plugin')).toHaveText('drumkit');
   });
+
+  test('drum tracks render the GM drum-map rows in the piano roll', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+    await page.getByTestId('add-drumkit-track').click();
+    const trackIdx = await page.evaluate(() => (window as any).__bridge.inspectTracks().length - 1);
+    await page.click(`[data-testid="track-row-${trackIdx}"]`);
+
+    // Drum rows are visible — pitches 36 / 38 / 39 / 42 / 46 each
+    // have a cell at every step. We only check the row labels +
+    // the kick cell at step 0 to keep the spec tight.
+    await expect(page.locator(`[data-testid="piano-cell-36-0"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="piano-cell-38-0"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="piano-cell-42-0"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="piano-cell-46-0"]`)).toBeVisible();
+
+    // Friendly labels in the key column (scoped to .drum-roll so we
+    // don't match identically-named param labels in the panel).
+    const keys = page.locator('.drum-roll .key');
+    await expect(keys.filter({ hasText: /^Kick$/ })).toBeVisible();
+    await expect(keys.filter({ hasText: /^Snare$/ })).toBeVisible();
+    await expect(keys.filter({ hasText: /^Closed Hat$/ })).toBeVisible();
+    await expect(keys.filter({ hasText: /^Open Hat$/ })).toBeVisible();
+
+    // Clicking a kick cell adds a note at MIDI 36.
+    await page.click('[data-testid="piano-cell-36-0"]');
+    const notes = await page.evaluate(
+      (i) => (window as any).__bridge.getPianoRollNotes(i),
+      trackIdx,
+    );
+    expect(notes.some((n: { pitch: number }) => n.pitch === 36)).toBe(true);
+  });
 });
