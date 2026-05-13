@@ -100,7 +100,12 @@
     type RootHandle,
     type SatelliteIntent,
   } from './lib/satellite';
-  import { createPipController, isPipSupported, type PipController } from './lib/pip';
+  import {
+    createDocsPipController,
+    createPipController,
+    isPipSupported,
+    type PipController,
+  } from './lib/pip';
   import { createAudioRecorder, type AudioRecorder } from './lib/audio-recorder';
   import { encodeWavMono16 } from './lib/wav';
 
@@ -534,6 +539,8 @@
     installedPlugins = [];
     pipController?.destroy();
     pipController = null;
+    docsPip?.destroy();
+    docsPip = null;
     rootSyncHandle?.destroy();
     rootSyncHandle = null;
     midi?.destroy();
@@ -713,6 +720,18 @@
   // TransportPipPanel sees current state.
   let pipController: PipController | null = null;
   let pipSupported = $state(isPipSupported());
+
+  // Phase-8 follow-up — Document PIP user guide. PIP-supported
+  // browsers get a floating reader; everyone else opens the docs in
+  // a new browser tab via the `?docs=1` route.
+  let docsPip: PipController | null = null;
+  async function openDocs() {
+    if (isPipSupported()) {
+      if (!docsPip) docsPip = createDocsPipController();
+      try { await docsPip.open(); return; } catch { /* fall through */ }
+    }
+    window.open('?docs=1', 'docs', 'noopener');
+  }
   let pipPlaying = $state(false);
 
   function ensurePipController(): PipController | null {
@@ -1322,6 +1341,14 @@
             ? 'Open transport in a Picture-in-Picture window'
             : 'Document PIP not supported in this browser'}
         >⌐ PIP</button>
+
+        <button
+          class="tb"
+          data-testid="open-docs"
+          onclick={() => void openDocs()}
+          title="Open the user guide{pipSupported ? ' in a Picture-in-Picture window' : ' in a new tab'}"
+          aria-label="Open user guide"
+        >?</button>
       </header>
 
       <!-- LEFT RAIL: track list. -->

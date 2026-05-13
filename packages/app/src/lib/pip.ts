@@ -12,6 +12,7 @@
 // a thing.
 
 import { mount, unmount } from 'svelte';
+import DocsPanel from './DocsPanel.svelte';
 import TransportPipPanel from './TransportPipPanel.svelte';
 
 export interface PipBindings {
@@ -93,6 +94,60 @@ export function createPipController(bindings: PipBindings): PipController {
         target: body,
         props: { bindings },
       });
+      win.addEventListener('pagehide', closeMounted);
+    },
+    close() {
+      const w = win;
+      if (w) w.close();
+      closeMounted();
+    },
+    destroy() {
+      this.close();
+    },
+  };
+}
+
+/// Phase-8 follow-up — Document PIP for the user guide. Same plumbing
+/// as the transport PIP (mount a Svelte component inside a popped-out
+/// PIP window), just a different component + window size.
+export function createDocsPipController(): PipController {
+  let win: Window | null = null;
+  let mounted: ReturnType<typeof mount> | null = null;
+
+  const closeMounted = () => {
+    if (mounted) {
+      try { unmount(mounted); } catch { /* window already gone */ }
+      mounted = null;
+    }
+    win = null;
+  };
+
+  return {
+    isOpen: () => win !== null,
+    async open() {
+      if (win) return;
+      const dpip = (window as WindowWithPip).documentPictureInPicture;
+      if (!dpip) throw new Error('Document Picture-in-Picture not supported');
+      win = await dpip.requestWindow({ width: 520, height: 720 });
+      const style = win.document.createElement('style');
+      style.textContent = `
+        @import url('${window.location.origin}/src/styles/tokens.css');
+        html, body {
+          margin: 0;
+          background: var(--bg-1, #0e0f12);
+          color: var(--fg-1, #c8ccd4);
+          font-family: var(--font-sans, system-ui, sans-serif);
+          height: 100vh;
+        }
+        #docs-root { height: 100vh; }
+      `;
+      win.document.head.appendChild(style);
+      // Honor the same favicon + title for clarity in the OS dock.
+      win.document.title = '8347 Studio — User Guide';
+      const root = win.document.createElement('div');
+      root.id = 'docs-root';
+      win.document.body.appendChild(root);
+      mounted = mount(DocsPanel, { target: root });
       win.addEventListener('pagehide', closeMounted);
     },
     close() {

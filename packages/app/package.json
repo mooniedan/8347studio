@@ -23,6 +23,7 @@
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/ibm-plex-sans": "^5.2.8",
+    "marked": "^18.0.3",
     "y-indexeddb": "^9.0.12",
     "yjs": "^13.6.30"
   }
