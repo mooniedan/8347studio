@@ -77,6 +77,22 @@ Once a peer joins your room:
 Awareness is ephemeral — when a peer leaves the room their avatar
 and ghost markers vanish.
 
+### Testing collab locally
+
+The simplest way to try collab on a single machine is two browsers
+or two profiles open on `https://localhost:8347/?room=foo`.
+
+For testing with a friend on the same Wi-Fi, run `pnpm dev:share`
+from the repo root instead of the usual `pnpm dev`. It boots the
+sync server + Vite on `0.0.0.0`, drops the dev cert (plain HTTP so
+WebSocket isn't blocked by mixed-content), and prints the LAN URLs
+to share. Visit `http://<your-laptop-ip>:8347/?room=<id>` on both
+devices.
+
+For testing over the internet, expose the printed URLs via Tailscale,
+Cloudflare Tunnel, or `ngrok http`, then point each peer at the
+tunnel host.
+
 > Realtime audio / MIDI streaming between peers is **not** in
 > scope; each peer renders audio locally from the shared project +
 > tempo map. Phase 9 M3 adds shared transport state (play/stop in

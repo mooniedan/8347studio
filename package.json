@@ -1,4 +1,6 @@
 {
   "private": true,
-  "scripts": {}
+  "scripts": {
+    "dev:share": "node scripts/dev-share.mjs"
+  }
 }

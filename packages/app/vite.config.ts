@@ -22,8 +22,20 @@ const crossOriginIsolation = {
   },
 }
 
+// `pnpm dev:share` (Phase-9 LAN-testing mode) sets SHARE_MODE=1 so
+// Vite drops the self-signed HTTPS cert and binds to 0.0.0.0. Plain
+// HTTP avoids the mixed-content trap when the page tries to WS into
+// the sync server, and 0.0.0.0 lets other devices on the LAN reach
+// the dev server. SAB still works — crossOriginIsolated only needs
+// the COOP/COEP headers, not HTTPS.
+const shareMode = process.env.SHARE_MODE === '1';
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [svelte(), basicSsl(), crossOriginIsolation],
-  server: { port: 8347, strictPort: true },
+  plugins: [svelte(), ...(shareMode ? [] : [basicSsl()]), crossOriginIsolation],
+  server: {
+    port: 8347,
+    strictPort: true,
+    host: shareMode ? '0.0.0.0' : 'localhost',
+  },
 })

@@ -47,6 +47,20 @@ Read these before doing non-trivial work:
   The `m4-tempo "BPM doubles tick rate"` test is timing-flaky under
   parallel load; passing in isolation is the bar.
 
+## Local commands
+
+- `pnpm --filter app dev` — Vite dev (HTTPS @ 8347, localhost only).
+- `pnpm dev:share` — Phase-9 LAN-testing mode. Boots Vite + the
+  sync-server on `0.0.0.0`, plain HTTP, prints LAN URLs so multiple
+  devices can join the same `?room=<id>`. Implementation:
+  `scripts/dev-share.mjs`; the `SHARE_MODE=1` env var in
+  `packages/app/vite.config.ts` drops the self-signed cert.
+- `pnpm --filter sync-server start` — Phase-9 sync server alone
+  (`ws://0.0.0.0:1234/room/<id>`).
+- `pnpm --filter sync-server test` — node --test for the wire
+  protocol.
+- `pnpm --filter app exec playwright test` — full e2e suite.
+
 ## Where features live
 
 - Rust audio engine: `crates/audio-engine/` (DSP, plugins, scheduler).
@@ -55,5 +69,9 @@ Read these before doing non-trivial work:
   - Design tokens + base components: `src/styles/`, `src/lib/ui/`.
   - Project state + helpers: `src/lib/project.ts`.
   - Engine bridge: `src/lib/engine-bridge.ts`.
+  - Sync client: `src/lib/sync.ts`. Collab awareness state:
+    `src/lib/collab.svelte.ts`.
+- Sync server: `services/sync-server/` (Node + y-protocols).
 - Tests: `packages/app/tests/*.spec.ts` (Playwright);
+  `services/sync-server/test/*.test.mjs` (node --test);
   `crates/*/src/**` (cargo).
