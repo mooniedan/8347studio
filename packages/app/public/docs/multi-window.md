@@ -61,6 +61,22 @@ Identity is per-machine — your display name + an ephemeral color
 live in `localStorage`. They're sent over awareness so peers can
 tell each other apart.
 
+### Awareness affordances (Phase 9 M4)
+
+Once a peer joins your room:
+
+- A **peer avatar** appears next to your own in the top bar, with
+  the peer's color and the first letter of their name.
+- The **track row a peer has selected** shows a ghost ring + dot
+  in their color, so you can see what they're working on at a
+  glance.
+- In the **piano-roll**, the cell a peer is hovering renders a
+  ghost outline in their color — useful for guiding a friend's
+  attention to a specific note.
+
+Awareness is ephemeral — when a peer leaves the room their avatar
+and ghost markers vanish.
+
 > Realtime audio / MIDI streaming between peers is **not** in
 > scope; each peer renders audio locally from the shared project +
 > tempo map. Phase 9 M3 adds shared transport state (play/stop in

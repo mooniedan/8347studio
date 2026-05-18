@@ -115,6 +115,7 @@
     type SyncStatus,
   } from './lib/sync';
   import { Awareness } from 'y-protocols/awareness';
+  import { createCollabState, type CollabState } from './lib/collab.svelte';
 
   // Phase-9 M5 — collab mode is opt-in via `?room=<id>`. main.ts
   // passes the id through; null/undefined means "local mode".
@@ -304,6 +305,11 @@
       p.tracks.unobserve(bump);
     };
   });
+  // Phase-9 M4 — broadcast our currently-selected track over
+  // awareness so peers can render a ghost ring on the same row.
+  $effect(() => {
+    collab?.setSelectedTrack(selectedTrackIdx);
+  });
   let selectedTrackColor = $derived.by((): string => {
     void trackMetaVersion;
     if (!project) return 'transparent';
@@ -428,6 +434,9 @@
   let syncHandle: SyncHandle | null = null;
   let syncAwareness: Awareness | null = null;
   let syncStatus = $state<SyncStatus>('idle');
+  // Reactive view over peers' awareness state. `null` outside a room
+  // session; created/destroyed alongside `syncAwareness`.
+  let collab = $state<CollabState | null>(null);
 
   // User identity for collab — display name + an ephemeral color
   // from the P0 palette so peers can tell each other apart. Persisted
@@ -606,7 +615,12 @@
       name: collabUser.name,
       color: collabUser.color,
     });
+    // Reflect the user's currently-selected track from the moment
+    // we connect so peers see our position without having to wait
+    // for the next track-row click.
+    awareness.setLocalStateField('selectedTrackIdx', selectedTrackIdx);
     syncAwareness = awareness;
+    collab = createCollabState(awareness);
     syncHandle = attachSync(project.doc, {
       url: syncUrlForRoom(roomId),
       awareness,
@@ -619,6 +633,8 @@
   /// current Y.Doc in memory; callers that want to also reset the
   /// document should bootProject afterwards.
   function detachSyncFromCurrent(): void {
+    collab?.destroy();
+    collab = null;
     syncHandle?.destroy();
     syncHandle = null;
     syncAwareness?.destroy();
@@ -691,6 +707,8 @@
     docsPip = null;
     rootSyncHandle?.destroy();
     rootSyncHandle = null;
+    collab?.destroy();
+    collab = null;
     syncHandle?.destroy();
     syncHandle = null;
     syncAwareness?.destroy();
@@ -1482,9 +1500,8 @@
           {/if}
         </div>
 
-        <!-- Phase-9 M5 — Share button toggles the collab session.
-             When connected, the button doubles as a copy-link affordance.
-             Phase 9 M4 will grow the avatar slot into a peer list. -->
+        <!-- Phase-9 M4 — collaborator avatars. Self first, then every
+             remote peer with their awareness color + initial. -->
         <div class="avatars" data-testid="collab-avatars">
           {#if activeRoomId}
             <span
@@ -1493,6 +1510,16 @@
               style:background-color={collabUser.color}
               title="You — {collabUser.name}"
             >{collabUser.name.slice(0, 1).toUpperCase()}</span>
+            {#each collab?.peers ?? [] as p (p.id)}
+              {@const name = p.state.user?.name ?? `peer ${p.id}`}
+              {@const color = p.state.user?.color ?? 'var(--fg-2)'}
+              <span
+                class="avatar peer"
+                data-testid={`collab-peer-avatar-${p.id}`}
+                style:background-color={color}
+                title={name}
+              >{name.slice(0, 1).toUpperCase()}</span>
+            {/each}
           {/if}
         </div>
 
@@ -1534,6 +1561,7 @@
             {project}
             selectedIdx={selectedTrackIdx}
             onSelect={(i) => (selectedTrackIdx = i)}
+            {collab}
           />
         {/key}
       </aside>
@@ -1609,7 +1637,7 @@
             </div>
           {:else if selectedPluginId === 'builtin:subtractive' || selectedPluginId === 'builtin:drumkit'}
             <div class="synth-stack">
-              <PianoRoll {project} trackIdx={selectedTrackIdx} />
+              <PianoRoll {project} trackIdx={selectedTrackIdx} {collab} />
               <PluginPanel
                 {project}
                 trackIdx={selectedTrackIdx}

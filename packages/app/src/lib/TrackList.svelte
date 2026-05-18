@@ -10,15 +10,34 @@
     type Project,
   } from './project';
 
+  import type { CollabState } from './collab.svelte';
+
   const {
     project,
     selectedIdx,
     onSelect,
+    collab = null,
   }: {
     project: Project;
     selectedIdx: number;
     onSelect: (idx: number) => void;
+    /// Phase-9 M4 — when set, render ghost rings on tracks remote
+    /// peers have selected. Each peer paints in their own color.
+    collab?: CollabState | null;
   } = $props();
+
+  // Reactive derivation — for each row, the list of peers whose
+  // `selectedTrackIdx` matches.
+  function peersOn(rowIdx: number): { id: number; color: string; name: string }[] {
+    if (!collab) return [];
+    const out: { id: number; color: string; name: string }[] = [];
+    for (const p of collab.peers) {
+      if (p.state.selectedTrackIdx === rowIdx && p.state.user) {
+        out.push({ id: p.id, color: p.state.user.color, name: p.state.user.name });
+      }
+    }
+    return out;
+  }
 
   let tracks = $state<{ id: string; name: string; color: string }[]>(snapshot());
   let armedId = $state<string | null>(untrack(() => getArmedTrackId(project)));
@@ -71,9 +90,12 @@
 
 <div class="track-list" data-testid="track-list">
   {#each tracks as t, i (t.id)}
+    {@const rowPeers = peersOn(i)}
     <div
       class="row"
       class:selected={i === selectedIdx}
+      class:peer-selected={rowPeers.length > 0}
+      style:--peer-color={rowPeers[0]?.color ?? 'transparent'}
       onclick={() => onSelect(i)}
       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(i); } }}
       role="button"
@@ -82,6 +104,18 @@
     >
       <span class="stripe" style="background:{t.color}"></span>
       <span class="name">{t.name}</span>
+      {#if rowPeers.length > 0}
+        <span
+          class="peer-marker"
+          data-testid={`track-peer-marker-${i}`}
+          title={rowPeers.map((p) => p.name).join(', ')}
+          aria-label={`Peers viewing this track: ${rowPeers.map((p) => p.name).join(', ')}`}
+        >
+          {#each rowPeers as p (p.id)}
+            <span class="peer-dot" style:background={p.color}></span>
+          {/each}
+        </span>
+      {/if}
       <button
         class="arm"
         class:armed={armedId === t.id}
@@ -130,6 +164,21 @@
   }
   .row:hover { background: #222; }
   .row.selected { border-color: #555; background: #1f1f1f; }
+  /* Phase-9 M4 — ghost border in the peer's color when a remote
+     peer has this row selected. Layered under .selected so the
+     local selection takes visual precedence. */
+  .row.peer-selected { box-shadow: inset 0 0 0 1px var(--peer-color); }
+  .peer-marker {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-right: 4px;
+  }
+  .peer-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
   .stripe { width: 8px; height: 14px; border-radius: 2px; }
   .name { flex: 1; }
   .arm {

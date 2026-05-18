@@ -14,7 +14,41 @@
     removePianoRollNoteAt,
   } from './project';
 
-  const { project, trackIdx }: { project: Project; trackIdx: number } = $props();
+  import type { CollabState } from './collab.svelte';
+
+  const {
+    project,
+    trackIdx,
+    collab = null,
+  }: {
+    project: Project;
+    trackIdx: number;
+    /// Phase-9 M4 — optional collab state. Hover events broadcast our
+    /// `pianoCell` so peers see a ghost cell on the same coordinate;
+    /// peers' cells render as colored borders below.
+    collab?: CollabState | null;
+  } = $props();
+
+  /// Color → highlight for peers hovering this track's cells. Other
+  /// tracks' peers are ignored so we don't show a phantom highlight
+  /// on tracks they're not actually looking at.
+  function peerCellColor(midi: number, col: number): string | null {
+    if (!collab) return null;
+    for (const p of collab.peers) {
+      const cell = p.state.pianoCell;
+      if (cell && cell.trackIdx === trackIdx && cell.midi === midi && cell.col === col) {
+        return p.state.user?.color ?? 'var(--accent-hi)';
+      }
+    }
+    return null;
+  }
+
+  function broadcastHover(col: number, midi: number) {
+    collab?.setPianoCell({ trackIdx, midi, col });
+  }
+  function clearHoverBroadcast() {
+    collab?.setPianoCell(null);
+  }
 
   const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const BLACK = new Set([1, 3, 6, 8, 10]);
@@ -166,18 +200,23 @@
         grid-template-rows: repeat({rowDefs.length}, var(--row-h));
         grid-template-columns: repeat({cols}, var(--col-w));
       "
+      onmouseleave={clearHoverBroadcast}
+      role="presentation"
     >
       {#each rowDefs as row, r (row.midi)}
         {#each Array(cols) as _, c}
+          {@const peerColor = peerCellColor(row.midi, c)}
           <button
             class="cell"
             class:black-row={row.isAccent}
             class:beat={c % 4 === 0}
             class:on={Boolean(noteAt(c, row.midi))}
             class:playhead={c === playheadCol}
-            style="grid-row: {r + 1}; grid-column: {c + 1};"
+            class:peer-hover={peerColor != null}
+            style="grid-row: {r + 1}; grid-column: {c + 1};{peerColor ? ` --peer-color: ${peerColor};` : ''}"
             data-testid={`piano-cell-${row.midi}-${c}`}
             onclick={() => toggleCell(c, row.midi)}
+            onmouseenter={() => broadcastHover(c, row.midi)}
             aria-label={`${row.label} ${c + 1}`}
           ></button>
         {/each}
@@ -268,5 +307,10 @@
   }
   .cell.on.playhead {
     background: #ffaa33;
+  }
+  /* Phase-9 M4 — ghost outline in the peer's color when a remote
+     peer is hovering this cell. */
+  .cell.peer-hover {
+    box-shadow: inset 0 0 0 2px var(--peer-color, var(--accent-hi));
   }
 </style>
