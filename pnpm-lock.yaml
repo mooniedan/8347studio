@@ -16,12 +16,18 @@ importers:
       '@fontsource/ibm-plex-sans':
         specifier: ^5.2.8
         version: 5.2.8
+      lib0:
+        specifier: ^0.2.117
+        version: 0.2.117
       marked:
         specifier: ^18.0.3
         version: 18.0.3
       y-indexeddb:
         specifier: ^9.0.12
         version: 9.0.12(yjs@13.6.30)
+      y-protocols:
+        specifier: ^1.0.7
+        version: 1.0.7(yjs@13.6.30)
       yjs:
         specifier: ^13.6.30
         version: 13.6.30
@@ -47,6 +53,9 @@ importers:
       svelte-check:
         specifier: ^4.3.4
         version: 4.4.2(picomatch@4.0.3)(svelte@5.53.0)(typescript@5.9.3)
+      sync-server:
+        specifier: workspace:*
+        version: link:../../services/sync-server
       typescript:
         specifier: ~5.9.3
         version: 5.9.3

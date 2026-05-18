@@ -17,14 +17,17 @@
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "svelte": "^5.45.2",
     "svelte-check": "^4.3.4",
+    "sync-server": "workspace:*",
     "typescript": "~5.9.3",
     "vite": "^7.3.1"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/ibm-plex-sans": "^5.2.8",
+    "lib0": "^0.2.117",
     "marked": "^18.0.3",
     "y-indexeddb": "^9.0.12",
+    "y-protocols": "^1.0.7",
     "yjs": "^13.6.30"
   }
 }

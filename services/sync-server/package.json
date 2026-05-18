@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Phase-9 M1 — y-websocket sync server for 8347 Studio live collab",
+  "exports": {
+    ".": "./src/server.mjs"
+  },
   "scripts": {
     "start": "node src/server.mjs",
     "dev": "node --watch src/server.mjs",

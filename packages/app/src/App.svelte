@@ -108,6 +108,17 @@
   } from './lib/pip';
   import { createAudioRecorder, type AudioRecorder } from './lib/audio-recorder';
   import { encodeWavMono16 } from './lib/wav';
+  import {
+    attachSync,
+    syncUrlForRoom,
+    type SyncHandle,
+    type SyncStatus,
+  } from './lib/sync';
+  import { Awareness } from 'y-protocols/awareness';
+
+  // Phase-9 M5 — collab mode is opt-in via `?room=<id>`. main.ts
+  // passes the id through; null/undefined means "local mode".
+  const { roomId: initialRoomId = null } = $props<{ roomId?: string | null }>();
 
   // Phase 7 M2 — per-machine layout prefs (pane widths + collapsed
   // states). Persisted to LocalStorage; not in the Y.Doc because
@@ -407,6 +418,46 @@
     initialRegistry.projects[0];
   activeProjectId = initialProject.id;
 
+  // Phase-9 M5 — collab session state. `activeRoomId` is non-null
+  // whenever we have a live `?room=<id>` session; `syncHandle` drives
+  // the wire protocol; `syncAwareness` holds our + peers' ephemeral
+  // presence (cursor, name, color). `syncStatus` powers the toolbar
+  // indicator.
+  // svelte-ignore state_referenced_locally
+  let activeRoomId = $state<string | null>(initialRoomId);
+  let syncHandle: SyncHandle | null = null;
+  let syncAwareness: Awareness | null = null;
+  let syncStatus = $state<SyncStatus>('idle');
+
+  // User identity for collab — display name + an ephemeral color
+  // from the P0 palette so peers can tell each other apart. Persisted
+  // to LocalStorage so the same browser keeps a stable identity
+  // across reloads.
+  const COLLAB_USER_KEY = 'collab.user.v1';
+  const COLLAB_PALETTE = [
+    '#ff8a3d', '#ffd166', '#06d6a0', '#118ab2',
+    '#6f4ef2', '#ef476f', '#26a69a', '#9c89ff',
+  ];
+  type CollabUser = { name: string; color: string };
+  function loadCollabUser(): CollabUser {
+    try {
+      const raw = localStorage.getItem(COLLAB_USER_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<CollabUser>;
+        if (parsed.name && parsed.color) return parsed as CollabUser;
+      }
+    } catch { /* localStorage may be blocked */ }
+    return {
+      name: `Anon ${Math.floor(Math.random() * 9000) + 1000}`,
+      color: COLLAB_PALETTE[Math.floor(Math.random() * COLLAB_PALETTE.length)],
+    };
+  }
+  function saveCollabUser(u: CollabUser): void {
+    try { localStorage.setItem(COLLAB_USER_KEY, JSON.stringify(u)); }
+    catch { /* localStorage may be blocked */ }
+  }
+  let collabUser = $state<CollabUser>(loadCollabUser());
+
   // Phase-7 follow-up — the demo song lives in a reserved, ephemeral
   // in-memory slot. `inDemo` drives the save-as banner; `demoDirty`
   // flips on the user's first edit so the banner appears exactly
@@ -524,9 +575,106 @@
   }
 
   const ready = (async () => {
-    await bootProject(initialProject.docName);
-    await reloadInstalledPlugins();
+    if (initialRoomId) {
+      // `?room=<id>` boot path: ephemeral Y.Doc + sync attached.
+      // The server populates the doc via the y-protocols sync
+      // handshake; the local replica persists only for the tab's
+      // lifetime (no IDB mirror — keeps the data model uncomplicated).
+      await bootProject(`__room_${initialRoomId}__`, { ephemeral: true });
+      attachSyncToCurrent(initialRoomId);
+    } else {
+      await bootProject(initialProject.docName);
+      await reloadInstalledPlugins();
+    }
   })();
+
+  /// Wire the current project's Y.Doc to the sync server under
+  /// `roomId`. Idempotent: if a handle already exists it's torn down
+  /// first. Sets `activeRoomId` so the UI reflects the room state.
+  function attachSyncToCurrent(roomId: string): void {
+    if (!project) return;
+    if (syncHandle) {
+      syncHandle.destroy();
+      syncHandle = null;
+    }
+    if (syncAwareness) {
+      syncAwareness.destroy();
+      syncAwareness = null;
+    }
+    const awareness = new Awareness(project.doc);
+    awareness.setLocalStateField('user', {
+      name: collabUser.name,
+      color: collabUser.color,
+    });
+    syncAwareness = awareness;
+    syncHandle = attachSync(project.doc, {
+      url: syncUrlForRoom(roomId),
+      awareness,
+      onStatusChange: (s) => { syncStatus = s; },
+    });
+    activeRoomId = roomId;
+  }
+
+  /// Detach the sync session and revert to local mode. Keeps the
+  /// current Y.Doc in memory; callers that want to also reset the
+  /// document should bootProject afterwards.
+  function detachSyncFromCurrent(): void {
+    syncHandle?.destroy();
+    syncHandle = null;
+    syncAwareness?.destroy();
+    syncAwareness = null;
+    syncStatus = 'idle';
+    activeRoomId = null;
+  }
+
+  /// Generate a short, URL-safe room id. 8 chars from a 32-char
+  /// crockford-style alphabet gives 32^8 ≈ 10^12 — plenty for our
+  /// "share a link" use case and short enough to read aloud.
+  function makeRoomId(): string {
+    const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
+    const buf = new Uint8Array(8);
+    crypto.getRandomValues(buf);
+    let out = '';
+    for (const b of buf) out += alphabet[b % alphabet.length];
+    return out;
+  }
+
+  /// Share button handler. If we're already in a room, copy the URL.
+  /// Otherwise generate a room id, attach sync (uploading the current
+  /// doc to the server), update the URL bar, and copy the link.
+  async function shareCurrent(): Promise<void> {
+    if (!project) return;
+    let roomId = activeRoomId;
+    if (!roomId) {
+      roomId = makeRoomId();
+      attachSyncToCurrent(roomId);
+      // Reflect the live room in the URL bar so a refresh keeps the
+      // session and copies of the bar text are useful.
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', roomId);
+      window.history.replaceState(null, '', url.toString());
+    }
+    const shareUrl = new URL(window.location.href);
+    shareUrl.searchParams.set('room', roomId);
+    try {
+      await navigator.clipboard.writeText(shareUrl.toString());
+    } catch {
+      // Clipboard may be blocked (insecure context, denied perms).
+      // The URL bar still shows the link — fall through silently.
+    }
+  }
+
+  /// Update the persisted collab identity. Awareness reflects the
+  /// change immediately so peers see the new name/color without
+  /// reconnect.
+  function updateCollabUser(next: Partial<CollabUser>): void {
+    collabUser = { ...collabUser, ...next };
+    saveCollabUser(collabUser);
+    syncAwareness?.setLocalStateField('user', {
+      name: collabUser.name,
+      color: collabUser.color,
+    });
+  }
 
   async function tearDownCurrent(): Promise<void> {
     // Phase-8 M5b — unload session plugins from the worklet so a
@@ -543,6 +691,11 @@
     docsPip = null;
     rootSyncHandle?.destroy();
     rootSyncHandle = null;
+    syncHandle?.destroy();
+    syncHandle = null;
+    syncAwareness?.destroy();
+    syncAwareness = null;
+    syncStatus = 'idle';
     midi?.destroy();
     midi = null;
     bridge?.destroy();
@@ -1329,8 +1482,30 @@
           {/if}
         </div>
 
-        <!-- Collaborator-avatar slot (Phase 9 M4 populates this). -->
-        <div class="avatars" data-testid="collab-avatars" aria-hidden="true"></div>
+        <!-- Phase-9 M5 — Share button toggles the collab session.
+             When connected, the button doubles as a copy-link affordance.
+             Phase 9 M4 will grow the avatar slot into a peer list. -->
+        <div class="avatars" data-testid="collab-avatars">
+          {#if activeRoomId}
+            <span
+              class="avatar self"
+              data-testid="collab-self-avatar"
+              style:background-color={collabUser.color}
+              title="You — {collabUser.name}"
+            >{collabUser.name.slice(0, 1).toUpperCase()}</span>
+          {/if}
+        </div>
+
+        <button
+          class="tb share"
+          class:connected={activeRoomId != null}
+          data-testid="share-button"
+          onclick={() => void shareCurrent()}
+          title={activeRoomId
+            ? `Copy room link (status: ${syncStatus})`
+            : 'Start a collab session and copy the room link'}
+          aria-label="Share collab session"
+        >{activeRoomId ? `⤴ ${syncStatus}` : '⤴ Share'}</button>
 
         <button
           class="tb"
@@ -1650,12 +1825,33 @@
   .midi-state { color: var(--fg-2); }
 
   .avatars {
-    /* placeholder for Phase 9 M4 collaborator avatars; reserves a
-       layout slot so M3 + tests can target it. */
+    /* Phase-9 M5 — currently just the local user's avatar.
+       M4 will expand into a peer list rendered from awareness. */
+    display: flex;
+    align-items: center;
+    gap: 4px;
     min-width: 28px;
     height: 24px;
     border-left: 1px solid var(--line-1);
     margin-left: var(--sp-2);
+    padding-left: var(--sp-2);
+  }
+  .avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    font-weight: 600;
+    color: #000;
+    border: 1px solid rgba(0, 0, 0, 0.25);
+  }
+  .tb.share.connected {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   /* LEFT RAIL */

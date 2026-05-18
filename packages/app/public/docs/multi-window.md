@@ -41,3 +41,27 @@ The mixer popup, transport PIP, and main root all stay in sync
 through a shared `BroadcastChannel`. Y.Doc updates merge across
 windows, so editing in any window updates the others without
 refresh.
+
+## Sharing a session (Phase 9 M5)
+
+Click the **⤴ Share** button in the top bar. The first click:
+
+- Generates a short room id and connects to the configured sync
+  server (`VITE_SYNC_URL`, default `ws://localhost:1234`).
+- Updates the URL bar to `…?room=<id>` and copies the full link to
+  the clipboard.
+- The Share button text flips from `⤴ Share` to `⤴ connected`,
+  and a small avatar with your display name appears next to it.
+
+A second person opening the link in any browser joins the same
+room and sees your project state. From then on, every edit either
+of you makes flows through the sync server and merges on both ends.
+
+Identity is per-machine — your display name + an ephemeral color
+live in `localStorage`. They're sent over awareness so peers can
+tell each other apart.
+
+> Realtime audio / MIDI streaming between peers is **not** in
+> scope; each peer renders audio locally from the shared project +
+> tempo map. Phase 9 M3 adds shared transport state (play/stop in
+> lockstep). For now only the project state syncs.
