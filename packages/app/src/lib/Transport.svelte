@@ -13,12 +13,17 @@
     type Project,
   } from './project';
 
+  import type { CollabState, TransportState } from './collab.svelte';
+
   // Global transport — play/stop, BPM, loop region, current-tick
   // readout. Lives at the top of the app so it stays mounted as the
   // user switches between track types (Subtractive lead, StepSeq bass,
   // Bus, Audio). Per-track playhead animations live in their own
   // track-view components.
-  const { project }: { project: Project } = $props();
+  const {
+    project,
+    collab = null,
+  }: { project: Project; collab?: CollabState | null } = $props();
 
   const TICKS_PER_BAR = STEPS_PER_CLIP * STEP_TICKS;
 
@@ -56,26 +61,65 @@
     };
   });
 
+  async function applyPlay() {
+    // Push every StepSeq clip's pattern before starting so freshly-
+    // added tracks start in sync without waiting for the next
+    // snapshot rebuild to land.
+    for (let t = 0; t < project.tracks.length; t++) {
+      const c = getStepSeqClipForTrack(project, t);
+      if (!c) continue;
+      const masks = readSteps(c);
+      for (let i = 0; i < STEPS_PER_CLIP; i++) {
+        await audio.setStepMask(t, i, masks[i]);
+      }
+    }
+    await audio.play();
+    playing = true;
+  }
+
+  async function applyStop() {
+    await audio.stop();
+    playing = false;
+  }
+
   async function togglePlay() {
     if (playing) {
-      await audio.stop();
-      playing = false;
+      await applyStop();
     } else {
-      // Push every StepSeq clip's pattern before starting so freshly-
-      // added tracks start in sync without waiting for the next
-      // snapshot rebuild to land.
-      for (let t = 0; t < project.tracks.length; t++) {
-        const c = getStepSeqClipForTrack(project, t);
-        if (!c) continue;
-        const masks = readSteps(c);
-        for (let i = 0; i < STEPS_PER_CLIP; i++) {
-          await audio.setStepMask(t, i, masks[i]);
-        }
-      }
-      await audio.play();
-      playing = true;
+      await applyPlay();
+    }
+    // Phase-9 M3 — broadcast our new transport state so peers in the
+    // same room follow. The hostId (= awareness clientID) marks this
+    // press as ours; followers see startedAtMs win arbitration if
+    // two peers click at the same time.
+    if (collab && collab.selfId != null) {
+      const state: TransportState = {
+        playing,
+        hostId: collab.selfId,
+        startedAtMs: Date.now(),
+      };
+      collab.setTransport(state);
     }
   }
+
+  // Phase-9 M3 — follower path. When a remote peer changes the
+  // transport, mirror it locally. Filter out our own broadcasts
+  // (they don't appear in latestPeerTransport because the peer list
+  // excludes self), and skip no-ops where the remote state already
+  // matches our local playing flag.
+  let lastAppliedRemote: TransportState | null = null;
+  $effect(() => {
+    const remote = collab?.latestPeerTransport ?? null;
+    if (!remote) return;
+    if (remote === lastAppliedRemote) return;
+    lastAppliedRemote = remote;
+    if (remote.playing === playing) return;
+    if (remote.playing) {
+      void applyPlay();
+    } else {
+      void applyStop();
+    }
+  });
 
   function onBpmInput(e: Event) {
     const v = Number((e.target as HTMLInputElement).value);

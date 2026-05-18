@@ -95,5 +95,17 @@ tunnel host.
 
 > Realtime audio / MIDI streaming between peers is **not** in
 > scope; each peer renders audio locally from the shared project +
-> tempo map. Phase 9 M3 adds shared transport state (play/stop in
-> lockstep). For now only the project state syncs.
+> tempo map.
+
+### Shared transport (Phase 9 M3)
+
+Pressing Play in a room broadcasts the transport state via
+awareness: every peer starts (or stops) within RTT. Each peer
+renders audio locally from the shared project, so all that has to
+sync is the play/stop edge — there's no audio streamed between
+clients. Pressing Play on a follower while someone else was host
+takes over: the most recent press wins arbitration.
+
+Sub-second drift between peers is expected and accepted; tighter
+sync (NTP-style clock skew, sample-accurate alignment) is a
+later-phase polish item.

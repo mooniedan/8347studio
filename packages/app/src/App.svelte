@@ -1390,7 +1390,7 @@
         />
 
         {#key activeProjectId}
-          <div class="transport-host"><Transport {project} /></div>
+          <div class="transport-host"><Transport {project} {collab} /></div>
         {/key}
 
         <MasterMeter />
