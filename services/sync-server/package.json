@@ -1,0 +1,18 @@
+{
+  "name": "sync-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Phase-9 M1 — y-websocket sync server for 8347 Studio live collab",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
+    "test": "node --test --test-reporter=spec test/"
+  },
+  "dependencies": {
+    "lib0": "^0.2.99",
+    "ws": "^8.18.0",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.30"
+  }
+}
