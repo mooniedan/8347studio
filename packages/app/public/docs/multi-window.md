@@ -109,3 +109,25 @@ takes over: the most recent press wins arbitration.
 Sub-second drift between peers is expected and accepted; tighter
 sync (NTP-style clock skew, sample-accurate alignment) is a
 later-phase polish item.
+
+### Editing the same thing together (Phase 9 M6)
+
+When two peers have the **same track** selected, the canvas head
+shows a `{name} is editing` pill in the peer's color, and the
+left-rail row gains a 2-pixel ring blending local and peer colors.
+It's a visual heads-up — the merge underneath is still safe:
+
+- **Notes at different ticks** — both peers' notes survive (Yjs
+  array merge).
+- **Notes at the same tick** — both pushes survive; you'll see two
+  notes painted on the same cell. Remove one and it stays removed
+  on both ends.
+- **BPM / pan / gain / param** — last-write-wins per field; both
+  peers converge to the same final value.
+- **Track add / remove** — both succeed; ordering may shift but
+  no track is lost.
+
+For the rare case where a peer is mid-drag on something you also
+want, the contention pill is enough today. A future polish pass
+may add per-object locks for heavy operations like audio-region
+trims.

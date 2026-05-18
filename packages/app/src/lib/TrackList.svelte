@@ -91,10 +91,12 @@
 <div class="track-list" data-testid="track-list">
   {#each tracks as t, i (t.id)}
     {@const rowPeers = peersOn(i)}
+    {@const isLocal = i === selectedIdx}
     <div
       class="row"
-      class:selected={i === selectedIdx}
+      class:selected={isLocal}
       class:peer-selected={rowPeers.length > 0}
+      class:contended={isLocal && rowPeers.length > 0}
       style:--peer-color={rowPeers[0]?.color ?? 'transparent'}
       onclick={() => onSelect(i)}
       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(i); } }}
@@ -168,6 +170,14 @@
      peer has this row selected. Layered under .selected so the
      local selection takes visual precedence. */
   .row.peer-selected { box-shadow: inset 0 0 0 1px var(--peer-color); }
+  /* Phase-9 M6 — when we and a peer are both on the same row, the
+     border thickens so the user clocks the contention immediately,
+     and the local background softens so the peer color reads as
+     the dominant signal. */
+  .row.contended {
+    box-shadow: inset 0 0 0 2px var(--peer-color);
+    background: #1a1a1a;
+  }
   .peer-marker {
     display: inline-flex;
     align-items: center;

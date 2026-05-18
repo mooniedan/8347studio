@@ -1577,6 +1577,22 @@
           ></span>
           <span class="track-name" data-testid="canvas-track-name">{selectedTrackNameValue}</span>
           {#if selectedTrackKind}<span class="track-kind">{selectedTrackKind}</span>{/if}
+          <!-- Phase-9 M6 — contention indicator. When a remote peer
+               has the same track selected as we do, show their name
+               + color so the user knows their edits may overlap. -->
+          {#if collab}
+            {@const peersHere = collab.peers.filter((p) => p.state.selectedTrackIdx === selectedTrackIdx && p.state.user)}
+            {#if peersHere.length > 0}
+              <span class="peer-contention" data-testid="canvas-peer-contention">
+                {#each peersHere as p (p.id)}
+                  <span
+                    class="peer-pill"
+                    style:--peer-color={p.state.user?.color ?? 'var(--accent-hi)'}
+                  >{p.state.user?.name ?? `peer ${p.id}`} is editing</span>
+                {/each}
+              </span>
+            {/if}
+          {/if}
         </header>
 
         {#if inDemo}
@@ -1918,6 +1934,27 @@
     font-size: var(--text-12);
     color: var(--fg-0);
     font-weight: 500;
+  }
+  .canvas-head .peer-contention {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding-right: var(--sp-2);
+  }
+  .peer-pill {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: 9px;
+    border: 1px solid var(--peer-color);
+    color: var(--peer-color);
+    background: rgba(255, 255, 255, 0.04);
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .canvas-head .track-kind {
     font-family: var(--font-mono);
