@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { untrack } from 'svelte';
   import {
+    STEP_TICKS,
+    STEPS_PER_CLIP,
     type Project,
     type AudioRegionView,
     type AssetMetadataView,
     getAudioRegions,
     getAssetMetadata,
   } from './project';
+  import Waveform from './Waveform.svelte';
 
   const {
     project,
@@ -52,6 +55,27 @@
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)} ms`;
     return `${seconds.toFixed(2)} s`;
   }
+
+  /// Pixels-per-tick — matches the piano-roll grid (`--col-w: 36px`
+  /// over `STEP_TICKS` ticks per cell), so an audio region rendered
+  /// alongside a piano-roll clip lines up bar-for-bar.
+  const PX_PER_TICK = 36 / STEP_TICKS;
+
+  /// Default visible-timeline span: 4 bars × 16 steps = 64 steps.
+  /// The actual timeline width also grows past this if any region
+  /// extends beyond it, so dropped clips stay visible.
+  const DEFAULT_STEPS = STEPS_PER_CLIP * 4;
+
+  const totalTicks = $derived.by((): number => {
+    let max = DEFAULT_STEPS * STEP_TICKS;
+    for (const r of regions) {
+      const end = r.startTick + r.lengthTicks;
+      if (end > max) max = end;
+    }
+    return max;
+  });
+
+  const timelineWidthPx = $derived(totalTicks * PX_PER_TICK);
 </script>
 
 <section class="audio-track" data-testid={`audio-track-${trackIdx}`}>
@@ -70,28 +94,45 @@
     </button>
     <span class="hint">Drag a WAV / MP3 file in to import, or hit Record.</span>
   </header>
+
   {#if regions.length === 0}
     <div class="empty" data-testid={`audio-track-${trackIdx}-empty`}>No regions yet.</div>
   {:else}
-    <ol class="regions">
-      {#each regions as r, i (i)}
-        {@const m = meta(r.assetHash)}
-        <li class="region" data-testid={`audio-region-${trackIdx}-${i}`}>
-          <span class="hash">{shortHash(r.assetHash)}</span>
-          <span class="label">
-            {m?.sourceFilename ?? 'asset'}
-            {#if m}
-              · {m.channels} ch · {m.sampleRate} Hz · {formatSamples(r.lengthSamples, m.sampleRate)}
-            {:else}
-              · loading metadata…
-            {/if}
-          </span>
-          <span class="pos" data-testid={`audio-region-${trackIdx}-${i}-position`}>
-            tick {r.startTick}
-          </span>
-        </li>
-      {/each}
-    </ol>
+    <div class="timeline-wrap">
+      <div
+        class="timeline"
+        style="width: {timelineWidthPx}px;"
+        data-testid={`audio-timeline-${trackIdx}`}
+      >
+        {#each regions as r, i (`${r.assetHash}:${r.startTick}:${i}`)}
+          {@const m = meta(r.assetHash)}
+          {@const leftPx = r.startTick * PX_PER_TICK}
+          {@const widthPx = Math.max(8, r.lengthTicks * PX_PER_TICK)}
+          <div
+            class="region"
+            data-testid={`audio-region-${trackIdx}-${i}`}
+            style="left: {leftPx}px; width: {widthPx}px;"
+            title={m?.sourceFilename ?? r.assetHash}
+          >
+            <Waveform hash={r.assetHash} widthPx={widthPx} />
+            <span class="region-label">
+              <span class="hash">{shortHash(r.assetHash)}</span>
+              {#if m}
+                <span class="label">
+                  {m.sourceFilename ?? 'asset'}
+                  · {formatSamples(r.lengthSamples, m.sampleRate)}
+                </span>
+              {:else}
+                <span class="label">· loading metadata…</span>
+              {/if}
+            </span>
+            <span class="pos" data-testid={`audio-region-${trackIdx}-${i}-position`}>
+              tick {r.startTick}
+            </span>
+          </div>
+        {/each}
+      </div>
+    </div>
   {/if}
 </section>
 
@@ -162,38 +203,64 @@
     padding: 16px;
     text-align: center;
   }
-  ol {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .timeline-wrap {
+    overflow-x: auto;
+    background: #0e0f12;
+    border: 1px solid #2a2a2a;
+  }
+  .timeline {
+    position: relative;
+    height: 72px;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 576px 100%;
   }
   .region {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 8px;
-    align-items: center;
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
     background: #1d1f1a;
     border: 1px solid #3a4f2a;
-    padding: 6px 8px;
+    border-radius: 2px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .region-label {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+    font-size: 9px;
+    text-shadow: 0 1px 0 rgba(0,0,0,0.8);
   }
   .hash {
     font-family: ui-monospace, monospace;
     font-size: 9px;
     color: #88c060;
-    background: #0a1505;
+    background: rgba(10, 21, 5, 0.85);
     border: 1px solid #1f2f10;
     border-radius: 3px;
     padding: 1px 4px;
   }
   .label {
     color: #ddd;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .pos {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
     color: #888;
     font-variant-numeric: tabular-nums;
-    font-size: 10px;
+    font-size: 9px;
+    pointer-events: none;
+    text-shadow: 0 1px 0 rgba(0,0,0,0.8);
   }
 </style>

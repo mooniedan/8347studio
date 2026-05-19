@@ -94,6 +94,15 @@ behaviour preserved in the engine.
 
 ## Audio region view
 
-Audio tracks show their region as a horizontal block at its
-`startTick`. Drag the block to move it. Region trimming, waveform
-thumbnails and fade handles are in Phase 10 M3 polish.
+Audio tracks now render as a **horizontal timeline**. Each region
+sits at `startTick * PX_PER_TICK` and stretches across
+`lengthTicks * PX_PER_TICK` pixels — the same pixels-per-step the
+piano-roll uses, so an audio region lined up with a piano-roll clip
+bars match column-for-column.
+
+- **Waveform thumbnail.** Each region paints a downsampled peak
+  series (one column per pixel) into a `<canvas>`. Decoding + peak
+  extraction is cached per asset hash, so duplicating a region or
+  scrubbing the track list doesn't re-decode the file.
+- Region trimming, fade handles, and an inspector edit panel
+  (gain / fade times / sample range) ship in later M3 slices.
