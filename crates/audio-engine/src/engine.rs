@@ -697,6 +697,54 @@ mod tests {
         }
     }
 
+    /// Build a baseline MIDI `TrackSnapshot` with sane defaults
+    /// (mixer at unity, no inserts/sends/regions, no instrument).
+    /// Tests use `TrackSnapshot { ..midi_track("Name") }` to override
+    /// only the fields they care about — keeps the fixture noise out
+    /// of the test body.
+    fn midi_track(name: &str) -> TrackSnapshot {
+        TrackSnapshot {
+            kind: TrackKind::Midi,
+            name: name.into(),
+            gain: 1.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            voices: 16,
+            instrument: InstrumentSnapshot::None,
+            steps: alloc::vec![],
+            step_velocities: alloc::vec![],
+            piano_roll_notes: alloc::vec![],
+            inserts: alloc::vec![],
+            sends: alloc::vec![],
+            audio_regions: alloc::vec![],
+        }
+    }
+
+    /// Audio variant of the baseline track. Inheritance via update
+    /// syntax: `TrackSnapshot { kind: TrackKind::Audio, ..midi_track(name) }`.
+    fn audio_track(name: &str) -> TrackSnapshot {
+        TrackSnapshot { kind: TrackKind::Audio, ..midi_track(name) }
+    }
+
+    /// Bus variant. Bus tracks default to `InstrumentSnapshot::None`
+    /// and only carry sends — same baseline shape with a different
+    /// `kind`.
+    fn bus_track(name: &str) -> TrackSnapshot {
+        TrackSnapshot { kind: TrackKind::Bus, ..midi_track(name) }
+    }
+
+    /// Build a `ProjectSnapshot` from a track list with defaults
+    /// (master gain unity, no automation, no loop region).
+    fn snap_with(tracks: alloc::vec::Vec<TrackSnapshot>) -> ProjectSnapshot {
+        ProjectSnapshot {
+            master_gain: 1.0,
+            tracks,
+            automation: alloc::vec![],
+            loop_region: None,
+        }
+    }
+
     fn const_track(value: f32) -> TrackEngine {
         TrackEngine::new(Box::new(ConstSource {
             value,
@@ -795,42 +843,22 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
             master_gain: 0.5,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: vec![
+            ..snap_with(alloc::vec![
                 TrackSnapshot {
-                    kind: TrackKind::Midi,
-                    name: "Drums".into(),
                     gain: 0.8,
                     pan: -0.3,
-                    mute: false,
-                    solo: false,
                     voices: 12,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 1 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
+                    ..midi_track("Drums")
                 },
                 TrackSnapshot {
-                    kind: TrackKind::Midi,
-                    name: "Bass".into(),
                     gain: 0.6,
                     pan: 0.2,
                     mute: true,
-                    solo: false,
-                    voices: 16,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
+                    ..midi_track("Bass")
                 },
-            ],
+            ])
         };
         e.apply_snapshot(&snap);
         assert_eq!(e.tracks.len(), 2);
@@ -844,27 +872,10 @@ mod tests {
     #[test]
     fn apply_snapshot_preserves_instrument_when_kind_matches() {
         let mut e = Engine::new(48_000.0);
-        let mut snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "T".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
-        };
+        let mut snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+            ..midi_track("T")
+        }]);
         e.apply_snapshot(&snap);
         let original = e.tracks[0]
             .instrument
@@ -997,44 +1008,16 @@ mod tests {
     #[test]
     fn apply_snapshot_routes_clip_steps_into_track_sequencer() {
         let mut e = Engine::new(48_000.0);
-        let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Drums".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
-                steps: alloc::vec![
-                    1u32 << 12,
-                    0,
-                    0,
-                    0,
-                    1u32 << 16,
-                    0,
-                    0,
-                    0,
-                    1u32 << 12,
-                    0,
-                    0,
-                    0,
-                    1u32 << 16,
-                    0,
-                    0,
-                    0
-                ],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
-        };
+        let snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+            steps: alloc::vec![
+                1u32 << 12, 0, 0, 0,
+                1u32 << 16, 0, 0, 0,
+                1u32 << 12, 0, 0, 0,
+                1u32 << 16, 0, 0, 0,
+            ],
+            ..midi_track("Drums")
+        }]);
         e.apply_snapshot(&snap);
         e.set_playing(true);
         // Render enough samples to cross the first step boundary so a
@@ -1050,24 +1033,13 @@ mod tests {
     fn apply_snapshot_round_trips_through_postcard() {
         let snap = ProjectSnapshot {
             master_gain: 0.75,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Lead".into(),
+            ..snap_with(alloc::vec![TrackSnapshot {
                 gain: 0.9,
-                pan: 0.0,
-                mute: false,
                 solo: true,
                 voices: 8,
                 instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 2 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
+                ..midi_track("Lead")
+            }])
         };
         let bytes = crate::snapshot::encode(&snap);
         let decoded = crate::snapshot::decode(&bytes).expect("decode");
@@ -1117,29 +1089,12 @@ mod tests {
     fn apply_snapshot_builds_a_subtractive_track_with_params() {
         use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
         let mut e = Engine::new(48_000.0);
-        let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Synth".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::Subtractive {
-                    params: alloc::vec![(PID_FILTER_CUTOFF, 1234.0)],
-                },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
-        };
+        let snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::Subtractive {
+                params: alloc::vec![(PID_FILTER_CUTOFF, 1234.0)],
+            },
+            ..midi_track("Synth")
+        }]);
         e.apply_snapshot(&snap);
         assert_eq!(e.tracks.len(), 1);
         let s = e.tracks[0]
@@ -1157,27 +1112,10 @@ mod tests {
     fn drain_events_routes_set_param_to_track_plugin() {
         use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
         let mut e = Engine::new(48_000.0);
-        let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Synth".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
-        };
+        let snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
+            ..midi_track("Synth")
+        }]);
         e.apply_snapshot(&snap);
 
         let mut buf = alloc::vec![0u8; crate::sab_ring::HEADER_BYTES + 64];
@@ -1207,41 +1145,25 @@ mod tests {
     fn insert_chain_attenuates_track_signal() {
         use crate::snapshot::{InsertKind, InsertSnapshot};
         let mut e = Engine::new(48_000.0);
-        let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Lead".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                // Two Gain inserts, each at 0.5 → chain output is 0.25× input.
-                inserts: alloc::vec![
-                    InsertSnapshot {
-                        kind: InsertKind::Gain,
-                        params: alloc::vec![(0, 0.5)],
-                        bypass: false,
-                        branches: alloc::vec![],
-                    },
-                    InsertSnapshot {
-                        kind: InsertKind::Gain,
-                        params: alloc::vec![(0, 0.5)],
-                        bypass: false,
-                        branches: alloc::vec![],
-                    },
-                ],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
-        };
+        let snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+            // Two Gain inserts, each at 0.5 → chain output is 0.25× input.
+            inserts: alloc::vec![
+                InsertSnapshot {
+                    kind: InsertKind::Gain,
+                    params: alloc::vec![(0, 0.5)],
+                    bypass: false,
+                    branches: alloc::vec![],
+                },
+                InsertSnapshot {
+                    kind: InsertKind::Gain,
+                    params: alloc::vec![(0, 0.5)],
+                    bypass: false,
+                    branches: alloc::vec![],
+                },
+            ],
+            ..midi_track("Lead")
+        }]);
         e.apply_snapshot(&snap);
         // Stub source: write 1.0 into the first insert's input via a
         // ConstSource (which Engine.tracks already uses).
@@ -1263,40 +1185,24 @@ mod tests {
     fn bypass_skips_insert_in_chain() {
         use crate::snapshot::{InsertKind, InsertSnapshot};
         let mut e = Engine::new(48_000.0);
-        let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Lead".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![
-                    InsertSnapshot {
-                        kind: InsertKind::Gain,
-                        params: alloc::vec![(0, 0.5)],
-                        bypass: true, // first insert bypassed
-                        branches: alloc::vec![],
-                    },
-                    InsertSnapshot {
-                        kind: InsertKind::Gain,
-                        params: alloc::vec![(0, 0.5)],
-                        bypass: false,
-                        branches: alloc::vec![],
-                    },
-                ],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
-        };
+        let snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
+            inserts: alloc::vec![
+                InsertSnapshot {
+                    kind: InsertKind::Gain,
+                    params: alloc::vec![(0, 0.5)],
+                    bypass: true, // first insert bypassed
+                    branches: alloc::vec![],
+                },
+                InsertSnapshot {
+                    kind: InsertKind::Gain,
+                    params: alloc::vec![(0, 0.5)],
+                    bypass: false,
+                    branches: alloc::vec![],
+                },
+            ],
+            ..midi_track("Lead")
+        }]);
         e.apply_snapshot(&snap);
         e.tracks[0].instrument = alloc::boxed::Box::new(ConstSource {
             value: 1.0,
@@ -1325,50 +1231,24 @@ mod tests {
             loop_region: None,
             tracks: alloc::vec![
                 TrackSnapshot {
-                    kind: TrackKind::Midi,
-                    name: "Source".into(),
-                    gain: 1.0,
-                    pan: 0.0,
-                    mute: false,
-                    solo: false,
-                    voices: 16,
                     instrument: InstrumentSnapshot::BuiltinSequencer { waveform: 0 },
-                    steps: alloc::vec![],
-                    piano_roll_notes: alloc::vec![],
-                    inserts: alloc::vec![],
                     sends: alloc::vec![SendSnapshot {
                         target_track: 1,
                         level: 1.0,
                         pre_fader: false,
                     }],
-                    audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
+                    ..midi_track("Source")
                 },
                 TrackSnapshot {
-                    kind: TrackKind::Bus,
-                    name: "Reverb Bus".into(),
-                    // Mute the source's dry path effectively by giving
-                    // the bus a clean signal path: the ConstSource on
-                    // track 0 still contributes to master, but we can
-                    // verify the bus output by comparing with vs.
-                    // without the bus.
-                    gain: 1.0,
-                    pan: 0.0,
-                    mute: false,
-                    solo: false,
-                    voices: 16,
-                    instrument: InstrumentSnapshot::None,
-                    steps: alloc::vec![],
-                    piano_roll_notes: alloc::vec![],
+                    // Bus gets a Gain×2 insert so its output doubles
+                    // whatever the send feeds in.
                     inserts: alloc::vec![InsertSnapshot {
                         kind: InsertKind::Gain,
                         params: alloc::vec![(0, 2.0)],
                         bypass: false,
                         branches: alloc::vec![],
                     }],
-                    sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
+                    ..bus_track("Reverb Bus")
                 },
             ],
         };
@@ -1428,20 +1308,8 @@ mod tests {
                 ],
             }],
             tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Lead".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
                 instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
+                ..midi_track("Lead")
             }],
             loop_region: None,
         };
@@ -1515,18 +1383,6 @@ mod tests {
             automation: alloc::vec![],
             loop_region: None,
             tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Audio,
-                name: "Loop".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::None,
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
                 audio_regions: alloc::vec![AudioRegionSnapshot {
                     asset_id: 7,
                     start_sample: 256,
@@ -1536,7 +1392,7 @@ mod tests {
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                 }],
-                step_velocities: alloc::vec![],
+                ..audio_track("Loop")
             }],
         };
         e.apply_snapshot(&snap);
@@ -1609,32 +1465,16 @@ mod tests {
         let mut e = Engine::new(48_000.0);
         // Track-level PianoRoll → Subtractive. C4 NoteOn at tick 0
         // for 1920 ticks (one beat at 120 BPM, ppq=960).
-        let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Lead".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
-                instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![NoteSnapshot {
-                    pitch: 60,
-                    velocity: 100,
-                    start_tick: 0,
-                    length_ticks: 1920,
-                }],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
+        let snap = snap_with(alloc::vec![TrackSnapshot {
+            instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
+            piano_roll_notes: alloc::vec![NoteSnapshot {
+                pitch: 60,
+                velocity: 100,
+                start_tick: 0,
+                length_ticks: 1920,
             }],
-        };
+            ..midi_track("Lead")
+        }]);
         e.apply_snapshot(&snap);
         e.set_playing(true);
 
@@ -1651,27 +1491,12 @@ mod tests {
         use crate::plugins::subtractive::{Subtractive, PID_FILTER_CUTOFF};
         let mut e = Engine::new(48_000.0);
         let mut snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
-            loop_region: None,
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Synth".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
+            ..snap_with(alloc::vec![TrackSnapshot {
                 instrument: InstrumentSnapshot::Subtractive {
                     params: alloc::vec![(PID_FILTER_CUTOFF, 1500.0)],
                 },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
+                ..midi_track("Synth")
+            }])
         };
         e.apply_snapshot(&snap);
         let original_ptr = e.tracks[0]
@@ -1710,25 +1535,11 @@ mod tests {
     fn loop_region_wraps_tick_pos_at_end_back_to_start() {
         let mut e = Engine::new(48_000.0);
         let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
             loop_region: Some(LoopRegion { start_tick: 0, end_tick: 1000 }),
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "Lead".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
-                voices: 16,
+            ..snap_with(alloc::vec![TrackSnapshot {
                 instrument: InstrumentSnapshot::Subtractive { params: alloc::vec![] },
-                steps: alloc::vec![],
-                piano_roll_notes: alloc::vec![],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
+                ..midi_track("Lead")
+            }])
         };
         e.apply_snapshot(&snap);
         e.set_playing(true);
@@ -1772,30 +1583,17 @@ mod tests {
         // Replace the default Silence on track 0 with a counting plugin.
         // The simplest path: build via snapshot, then swap.
         let snap = ProjectSnapshot {
-            master_gain: 1.0,
-            automation: alloc::vec![],
             loop_region: Some(LoopRegion { start_tick: 0, end_tick: 500 }),
-            tracks: alloc::vec![TrackSnapshot {
-                kind: TrackKind::Midi,
-                name: "T".into(),
-                gain: 1.0,
-                pan: 0.0,
-                mute: false,
-                solo: false,
+            ..snap_with(alloc::vec![TrackSnapshot {
                 voices: 1,
-                instrument: InstrumentSnapshot::None,
-                steps: alloc::vec![],
                 piano_roll_notes: alloc::vec![NoteSnapshot {
                     pitch: 60,
                     velocity: 100,
                     start_tick: 100,
                     length_ticks: 50,
                 }],
-                inserts: alloc::vec![],
-                sends: alloc::vec![],
-                audio_regions: alloc::vec![],
-                step_velocities: alloc::vec![],
-            }],
+                ..midi_track("T")
+            }])
         };
         e.apply_snapshot(&snap);
         e.tracks[0].instrument = alloc::boxed::Box::new(CountingSynth::default());
