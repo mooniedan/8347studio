@@ -21,8 +21,9 @@ sandboxed inside the worklet.
 - **Zero install** — open the tab and start.
 - **Multi-window native** — the Document Picture-in-Picture API
   lets the transport float above any other window.
-- **CRDT-first** — every edit is mergeable, so Phase 9 collab is
-  a routing question, not a data-model question.
+- **Real-time collab** — the CRDT model was always built for it; one
+  click on **⤴ Share** brings a friend into the same project, with
+  shared transport and presence.
 - **Open plugin surface** — `manifest.json` + `.wasm` + SHA-256
   integrity, hosted anywhere over HTTPS.
 
@@ -30,5 +31,9 @@ sandboxed inside the worklet.
 
 - [Quick start](#page:quick-start) — load the demo song and press play.
 - [Transport bar](#page:transport) — every control on the top bar.
+- [Editing patterns](#page:editing) — step-sequencer, piano-roll,
+  drum rows.
 - [Plugins](#page:plugins) — install third-party WASM plugins.
+- [Multi-window workflow](#page:multi-window) — PIP transport,
+  popout mixer, **and Phase-9 live collab** (⤴ Share).
 - [Troubleshooting](#page:troubleshooting) — if something's stuck.

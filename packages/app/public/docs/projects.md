@@ -30,8 +30,20 @@ regression": every feature is supposed to be hearable from a fresh
 demo seed. If a feature lands but doesn't show up in the demo, the
 demo is wrong.
 
+## Joining a room (Phase 9 collab)
+
+Opening the app with `?room=<id>` in the URL boots an **ephemeral**
+project bound to that collab room (no IndexedDB mirror — the
+server is the source of truth). The Share button creates a room id
+for you; pasting a friend's room URL drops you straight into their
+project.
+
+Leaving the room is just navigating to `/` (or closing the tab).
+The local app reverts to your last opened persistent project on
+the next boot.
+
 ## Where projects live
 
-Every project is one IndexedDB database, keyed by its `docName`.
-The database holds the Y.Doc updates plus any recorded audio
-references. See [Files & storage](#page:files).
+Every persistent project is one IndexedDB database, keyed by its
+`docName`. The database holds the Y.Doc updates plus any recorded
+audio references. See [Files & storage](#page:files).

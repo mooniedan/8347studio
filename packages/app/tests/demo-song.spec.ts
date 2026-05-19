@@ -130,6 +130,24 @@ test.describe('demo song', () => {
     const distinct = new Set(bassVelocities!);
     expect(distinct.size).toBeGreaterThanOrEqual(2);
 
+    // Phase-10 M1 closeout — Phase-5 audio path is exercised by the
+    // synth-generated Riser track appended post-seed by
+    // enrichDemoSongWithAudioRiser. Look it up by name (its slot
+    // moves if earlier tracks are added) and confirm it carries an
+    // audio region.
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: {
+          inspectTracks: () => { name: string }[];
+          getAudioRegions: (i: number) => unknown[];
+        };
+      };
+      const tracks = w.__bridge.inspectTracks();
+      const riserIdx = tracks.findIndex((t) => /riser/i.test(t.name));
+      if (riserIdx < 0) return 0;
+      return w.__bridge.getAudioRegions(riserIdx).length;
+    }), { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
+
     // Automation lane present on track 0.
     expect(await automationLaneCount(page)).toBeGreaterThanOrEqual(1);
 

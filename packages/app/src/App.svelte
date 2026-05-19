@@ -56,6 +56,7 @@
     setAssetMetadata,
     setBpm,
     setMasterGain,
+    setTrackColor,
     setTrackGain,
     setTrackMute,
     setTrackSolo,
@@ -95,6 +96,7 @@
   import { parseManifest, type ParseResult } from './lib/plugin-manifest';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
   import * as assetStore from './lib/asset-store';
+  import { TRACK_PALETTE } from './lib/track-color';
   import {
     attachRootSync,
     attachSatelliteSync,
@@ -749,6 +751,12 @@
       // to the bass track. This grows the Demo Song to exercise the
       // third-party plugin runtime audibly (commitment #7).
       await enrichDemoSongWithBitcrusher();
+      // Phase-10 M1 closeout — drop a short atmospheric riser onto
+      // a new audio track so the Phase-5 audio path (import → OPFS
+      // → engine register → region playback) is also exercised by
+      // the cumulative regression. Synthesized in-page so we don't
+      // bundle any audio asset of our own.
+      await enrichDemoSongWithAudioRiser();
       // Arm only AFTER enrichment so its writes aren't mistaken for
       // user edits by the "Save as new project" prompt.
       armDemoDirtyWatcher();
@@ -814,6 +822,67 @@
       addAutomationPoint(project, bassIdx, 'insert', slotIdx, 2, { tick: total / 2, value: 0.7 });
       addAutomationPoint(project, bassIdx, 'insert', slotIdx, 2, { tick: total - 1, value: 0.25 });
     }
+  }
+
+  /// Phase-10 M1 closeout — add a synthetic 2-second pad-riser to a
+  /// fresh audio track so the demo song exercises the Phase-5 audio
+  /// path end-to-end (OPFS asset store → engine register → region
+  /// playback). The riser is generated in-page so we don't bundle a
+  /// licensed sample.
+  async function enrichDemoSongWithAudioRiser(): Promise<void> {
+    if (!project) return;
+    // addAudioTrack returns the id; the index is the new track's
+    // position at the end of the project.tracks array.
+    addAudioTrack(project, 'Riser');
+    const audioIdx = project.tracks.length - 1;
+    const bytes = synthesizeRiserWav();
+    try {
+      await importAssetIntoTrack(audioIdx, bytes, 'demo-riser.wav');
+    } catch (err) {
+      console.warn('demo riser import failed:', err);
+    }
+    // Subtle in the mix; the bass + drums carry the energy.
+    setTrackGain(project, audioIdx, 0.6);
+    setTrackColor(project, audioIdx, TRACK_PALETTE[2]); // yellow
+  }
+
+  /// Generate a 2-second 48 kHz mono pad-riser WAV (RIFF + 16-bit
+  /// PCM). Pitch sweeps from C2 (65 Hz) up two octaves with a
+  /// slow attack and exponential decay so it reads as a transition
+  /// effect rather than a melodic note.
+  function synthesizeRiserWav(): Uint8Array {
+    const sampleRate = 48000;
+    const seconds = 2;
+    const frames = sampleRate * seconds;
+    const blockAlign = 2;
+    const dataSize = frames * blockAlign;
+    const ab = new ArrayBuffer(44 + dataSize);
+    const dv = new DataView(ab);
+    let p = 0;
+    const setStr = (s: string) => {
+      for (let i = 0; i < s.length; i++) dv.setUint8(p + i, s.charCodeAt(i));
+      p += s.length;
+    };
+    const setU32 = (v: number) => { dv.setUint32(p, v, true); p += 4; };
+    const setU16 = (v: number) => { dv.setUint16(p, v, true); p += 2; };
+    setStr('RIFF'); setU32(36 + dataSize); setStr('WAVE');
+    setStr('fmt '); setU32(16); setU16(1); setU16(1);
+    setU32(sampleRate); setU32(sampleRate * blockAlign);
+    setU16(blockAlign); setU16(16);
+    setStr('data'); setU32(dataSize);
+    let phase = 0;
+    for (let i = 0; i < frames; i++) {
+      const t = i / frames;
+      const freq = 65 * Math.pow(4, t); // C2 → C4 over 2s
+      phase += (2 * Math.PI * freq) / sampleRate;
+      // Soft attack (0.3s) + long tail. Combine a fundamental sine
+      // with a quieter octave so the texture feels less pure.
+      const env = Math.min(t / 0.15, 1) * Math.exp(-2.5 * t);
+      const sample = (Math.sin(phase) * 0.6 + Math.sin(phase * 2) * 0.3) * env * 0.55;
+      dv.setInt16(p, Math.round(Math.max(-1, Math.min(1, sample)) * 0x7fff), true);
+      p += 2;
+    }
+    return new Uint8Array(ab);
   }
 
   /// Fork the current ephemeral demo Y.Doc into a new persistent

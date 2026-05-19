@@ -26,13 +26,29 @@ song.
 | Feature | Where to hear it |
 |---|---|
 | Polyphonic subtractive synth | Lead track chord stabs |
-| Step-sequenced bass | Bass track on beats 1 & 3 |
-| Sample-rate crusher (third-party WASM plugin) | Bass insert FX |
-| Drumkit (kick/snare/hat/clap/open-hat) | Drumkit track groove |
+| Step-sequenced bass | Bass track on every beat |
+| **Per-step velocity** (Phase 10 M1) | Bass downbeats accented vs. ghosted off-beats |
+| Sample-rate crusher (third-party WASM plugin) | Bass insert FX, mix sweep automation |
+| Drumkit (kick / snare / hat / clap / open-hat) | Drum track groove |
+| Drum-row piano-roll editor | Select the Drum track; rows show GM-pitch labels |
 | Sends + bus track | Lead + Bass → Reverb Bus |
-| Parameter automation | Lead filter cutoff sweep |
+| Parameter automation | Lead filter cutoff sweep + bitcrusher mix sweep |
 | MIDI Learn binding | CC#74 → Lead filter cutoff |
+| Transport loop region (4 bars) | Playback wraps every 4 bars |
 | Multi-window transport | Click ⌐ Transport in the top bar |
 
 If a new feature ships in the codebase and the demo doesn't exercise
 it, the demo is wrong, not the feature.
+
+## Features the demo can't cover
+
+A few things have to be tried manually because they live outside the
+single-Y.Doc seed:
+
+- **Audio import & recording** ([Recording](#page:recording)) — bring
+  your own sample / mic.
+- **Live collab** ([Multi-window](#page:multi-window)) — needs a
+  second browser or device. Click ⤴ Share.
+- **Plugin installation flow** ([Plugins](#page:plugins)) — the demo
+  pre-installs the bitcrusher, but the picker UI is best explored
+  on a fresh project.

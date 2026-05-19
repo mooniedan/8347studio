@@ -390,10 +390,12 @@ function seedDemoSong(p: Project): void {
     // without first using the Learn workflow.
     setMidiBinding(p, 74, { trackIdx: leadIdx, paramId: SUB_FILTER_CUTOFF });
 
-    // 13. (deferred) Audio track / OPFS region. Phase-5 audio assets
-    // need a sample shipped with the app; deciding what to bundle
-    // (size, licensing) is a separate task. When the sample is in
-    // place: addAudioTrack + addAudioRegion here.
+    // 13. Phase-5 audio path coverage is added post-seed by
+    // App.svelte::enrichDemoSongWithAudioRiser (the WAV is
+    // synthesized in-page so we don't bundle a licensed sample).
+    // It appends an Audio "Riser" track with a single 2-second
+    // region at tick 0 so the OPFS asset store + engine region
+    // playback are both exercised by the cumulative regression.
 
     // Suppress unused-var warnings on returned ids; the indexes drive
     // the demo, not the ids.
