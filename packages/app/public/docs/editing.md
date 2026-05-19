@@ -92,6 +92,28 @@ of the C3..C5 melodic range:
 Closed-hat hits **choke** any sustained Open Hat — the classic TR
 behaviour preserved in the engine.
 
+## Automation lanes
+
+Every track with automation gets a stack of mini-editors below the
+main editor (piano-roll / step-sequencer / audio timeline). Each
+lane is one **target parameter** — instrument or insert — drawn as
+an SVG row with a polyline through the existing points.
+
+- **Click empty area** → add a point at the snapped step + clicked
+  value. The value is taken from the cursor's y-position mapped
+  through the lane's auto-scaled range.
+- **Drag a point** → move it. The point's neighbours stay anchored;
+  on release the array re-sorts so the engine's playback evaluator
+  always sees points in tick order.
+- **Shift-click a point** → remove it. When the last point goes,
+  the whole lane is GC'd from the Y.Doc.
+- The lane's y-axis **auto-scales** to the observed min/max of its
+  own points — a 0..1 normalised param fills the same vertical
+  space as a wide-range field like a filter cutoff (0..20k).
+- Each lane writes through the Phase 4 M4 engine path that already
+  drives the demo song's filter sweep; collab peers see point
+  edits in real-time.
+
 ## Audio region view
 
 Audio tracks now render as a **horizontal timeline**. Each region

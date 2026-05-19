@@ -9,6 +9,7 @@
   import InsertSlots from './lib/InsertSlots.svelte';
   import SendList from './lib/SendList.svelte';
   import AudioTrackView from './lib/AudioTrackView.svelte';
+  import AutomationLanes from './lib/AutomationLanes.svelte';
   import ProjectsMenu from './lib/ProjectsMenu.svelte';
   import Inspector from './lib/Inspector.svelte';
   import MixerDrawer from './lib/MixerDrawer.svelte';
@@ -1087,12 +1088,14 @@
                 recording={audioRecordingTrackIdx === selectedTrackIdx}
                 onToggleRecord={() => toggleAudioRecord(selectedTrackIdx)}
               />
+              <AutomationLanes {project} trackIdx={selectedTrackIdx} />
               <InsertSlots {project} trackIdx={selectedTrackIdx} />
               <SendList {project} trackIdx={selectedTrackIdx} />
             </div>
           {:else if selectedPluginId === 'builtin:subtractive' || selectedPluginId === 'builtin:drumkit'}
             <div class="synth-stack">
               <PianoRoll {project} trackIdx={selectedTrackIdx} collab={session.collab} />
+              <AutomationLanes {project} trackIdx={selectedTrackIdx} />
               <PluginPanel
                 {project}
                 trackIdx={selectedTrackIdx}
@@ -1107,6 +1110,7 @@
           {:else}
             <div class="track-view">
               <Sequencer {project} trackIdx={selectedTrackIdx} />
+              <AutomationLanes {project} trackIdx={selectedTrackIdx} />
               <InsertSlots {project} trackIdx={selectedTrackIdx} />
               <SendList {project} trackIdx={selectedTrackIdx} />
             </div>
