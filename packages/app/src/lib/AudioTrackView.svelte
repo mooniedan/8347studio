@@ -19,11 +19,23 @@
     project,
     trackIdx,
     recording = false,
+    armed = false,
+    recordingStartedAtMs = null,
+    inputLabel = null,
     onToggleRecord = () => {},
   }: {
     project: Project;
     trackIdx: number;
     recording?: boolean;
+    /// Phase-10 M5 — track is armed for the next take (Y.Doc-backed
+    /// armedTrackId == this trackId). Drives the warm pulse glow.
+    armed?: boolean;
+    /// `Date.now()` snapshot at the moment recording started; null
+    /// when not recording. Drives the growing-placeholder width.
+    recordingStartedAtMs?: number | null;
+    /// Live-input label from `MediaStreamTrack.label` — used as the
+    /// "● REC from <device>" header during the take.
+    inputLabel?: string | null;
     onToggleRecord?: () => void;
   } = $props();
 
@@ -76,10 +88,55 @@
       const end = r.startTick + r.lengthTicks;
       if (end > max) max = end;
     }
+    if (recording) {
+      const end = recPlaceholderStartTick + recPlaceholderTicks;
+      if (end > max) max = end;
+    }
     return max;
   });
 
   const timelineWidthPx = $derived(totalTicks * PX_PER_TICK);
+
+  /// Phase-10 M5 — live "now" tick that drives the growing-
+  /// placeholder width during recording. We update at ~30 Hz via
+  /// requestAnimationFrame; tearing down on stop / unmount.
+  let recNowMs = $state(0);
+  $effect(() => {
+    if (!recording || recordingStartedAtMs == null) return;
+    let raf = 0;
+    let cancelled = false;
+    const loop = () => {
+      if (cancelled) return;
+      recNowMs = Date.now();
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  });
+
+  /// Convert elapsed ms → ticks via the project's current BPM.
+  /// PPQ = 960; ticks/sec = bpm * 16 (since 1 beat = 4 steps =
+  /// 4 * 240 ticks = 960). Falls back to 120 BPM when meta hasn't
+  /// shipped a tempo yet.
+  function ticksPerMsFromBpm(bpm: number): number {
+    return (bpm * 16) / 1000;
+  }
+  const recPlaceholderTicks = $derived.by((): number => {
+    if (!recording || recordingStartedAtMs == null) return 0;
+    void recNowMs; // dep
+    const bpm = (project.meta.get('bpm') as number | undefined) ?? 120;
+    const elapsedMs = Math.max(0, recNowMs - recordingStartedAtMs);
+    return Math.floor(elapsedMs * ticksPerMsFromBpm(bpm));
+  });
+  /// Position the placeholder after every existing region so it
+  /// reads as "the next take" rather than overlapping the last one.
+  const recPlaceholderStartTick = $derived.by((): number => {
+    let end = 0;
+    for (const r of regions) {
+      if (r.startTick + r.lengthTicks > end) end = r.startTick + r.lengthTicks;
+    }
+    return end;
+  });
 
   /// Phase-10 M3c — drag-to-move + trim handles.
   ///
@@ -258,7 +315,12 @@
   }
 </script>
 
-<section class="audio-track" data-testid={`audio-track-${trackIdx}`}>
+<section
+  class="audio-track"
+  class:armed={armed && !recording}
+  class:recording={recording}
+  data-testid={`audio-track-${trackIdx}`}
+>
   <header class="head">
     <span class="title">Audio Track</span>
     <button
@@ -272,10 +334,20 @@
       <span class="record-dot"></span>
       {recording ? 'Stop' : 'Record'}
     </button>
-    <span class="hint">Drag a WAV / MP3 file in to import, or hit Record.</span>
+    {#if recording && inputLabel}
+      <span class="input-label" data-testid={`audio-track-${trackIdx}-input-label`}>
+        ● REC from <span class="dev">{inputLabel}</span>
+      </span>
+    {:else if armed}
+      <span class="armed-pill" data-testid={`audio-track-${trackIdx}-armed-pill`}>
+        ARMED
+      </span>
+    {:else}
+      <span class="hint">Drag a WAV / MP3 file in to import, or hit Record.</span>
+    {/if}
   </header>
 
-  {#if regions.length === 0}
+  {#if regions.length === 0 && !recording}
     <div class="empty" data-testid={`audio-track-${trackIdx}-empty`}>No regions yet.</div>
   {:else}
     <div class="timeline-wrap">
@@ -288,6 +360,22 @@
         onpointercancel={onTimelinePointerUp}
         role="presentation"
       >
+        {#if recording}
+          {@const phLeftPx = recPlaceholderStartTick * PX_PER_TICK}
+          {@const phWidthPx = Math.max(4, recPlaceholderTicks * PX_PER_TICK)}
+          <!--
+            Phase-10 M5 — striped growing placeholder. Width updates
+            every animation frame off `recNowMs`, so it visibly grows
+            as the take progresses. Sits at the end of the existing
+            regions so it reads as "the next take is happening".
+          -->
+          <div
+            class="rec-placeholder"
+            data-testid={`audio-track-${trackIdx}-rec-placeholder`}
+            style="left: {phLeftPx}px; width: {phWidthPx}px;"
+            aria-label="Take in progress"
+          ></div>
+        {/if}
         {#each regions as r, i (`${r.assetHash}:${i}`)}
           {@const m = meta(r.assetHash)}
           {@const leftPx = previewLeftPx(i, r.startTick)}
@@ -475,6 +563,45 @@
     font-size: 11px;
     padding: 8px;
   }
+  /* Phase-10 M5 — armed-not-recording glow. Warm border + subtle
+     pulse so the user clocks the arming state at a glance. */
+  .audio-track.armed {
+    border-color: #ff7a3a;
+    box-shadow: 0 0 0 1px rgba(255, 122, 58, 0.25);
+    animation: arm-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes arm-pulse {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(255, 122, 58, 0.25); }
+    50%      { box-shadow: 0 0 0 2px rgba(255, 122, 58, 0.5); }
+  }
+  /* Recording active — the dot in the button already pulses; the
+     section gets a red border so the state is visible regardless of
+     where the user's looking. */
+  .audio-track.recording {
+    border-color: #ff3a3a;
+    box-shadow: 0 0 0 1px rgba(255, 58, 58, 0.45);
+  }
+  .armed-pill {
+    background: #2a0e0e;
+    color: #ffb38a;
+    border: 1px solid #ff7a3a;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .input-label {
+    color: #ff8585;
+    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .input-label .dev {
+    color: #ddd;
+    font-family: ui-monospace, monospace;
+  }
   .head {
     display: flex;
     align-items: center;
@@ -557,6 +684,22 @@
     flex-direction: column;
     cursor: grab;
     touch-action: none;
+  }
+  /* Phase-10 M5 — striped growing placeholder during recording.
+     Diagonal stripe pattern so the take is visually distinct from
+     a committed region, and grows in real time. */
+  .rec-placeholder {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    border: 1px solid #ff3a3a;
+    border-radius: 2px;
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgba(255, 58, 58, 0.35) 0 6px,
+      rgba(255, 58, 58, 0.15) 6px 12px
+    );
+    pointer-events: none;
   }
   .region.dragging {
     cursor: grabbing;

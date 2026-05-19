@@ -24,6 +24,20 @@ its old end.
 4. On **Stop**, the recorded region drops onto the track at tick 0,
    referencing the OPFS asset by SHA.
 
+### State visuals (Phase 10 M5)
+
+- **Armed-not-recording** — armed track row gets a warm pulsing
+  glow; the Audio strip shows an **ARMED** pill so the next take
+  destination is obvious at a glance.
+- **Recording** — the section gains a red ring, the dot in the
+  Record button pulses, and the header switches to
+  **● REC from \<device\>** (the device label from the live
+  `MediaStreamTrack`, falling back to "Default input").
+- **Take in progress** — a striped red placeholder block grows in
+  real time inside the timeline at the end of any existing
+  regions, so the user can see the take filling out before it
+  commits as a real region on **Stop**.
+
 ## Quantization & overdub
 
 - Recordings land at full PPQ resolution; no automatic quantize on

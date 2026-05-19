@@ -97,6 +97,7 @@
       class:selected={isLocal}
       class:peer-selected={rowPeers.length > 0}
       class:contended={isLocal && rowPeers.length > 0}
+      class:armed={armedId === t.id}
       style:--peer-color={rowPeers[0]?.color ?? 'transparent'}
       onclick={() => onSelect(i)}
       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(i); } }}
@@ -177,6 +178,19 @@
   .row.contended {
     box-shadow: inset 0 0 0 2px var(--peer-color);
     background: #1a1a1a;
+  }
+  /* Phase-10 M5 — armed track glow. The row gets a warm border +
+     subtle pulsing background so it's clear at a glance which track
+     is going to receive the next take. Peer / selection box-shadows
+     still win when both are active because they specify `inset`. */
+  .row.armed {
+    border-color: #ff5a3a;
+    background: #1f0e0a;
+    animation: arm-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes arm-pulse {
+    0%, 100% { background: #1f0e0a; }
+    50%      { background: #2a120c; }
   }
   .peer-marker {
     display: inline-flex;

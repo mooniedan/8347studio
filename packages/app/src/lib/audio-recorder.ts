@@ -14,6 +14,11 @@ export interface AudioRecorder {
   destroy(): void;
   readonly sampleRate: number;
   readonly recording: boolean;
+  /// Human-readable label of the live input — pulled from
+  /// `MediaStreamTrack.label` after `start()` resolves. Empty string
+  /// before start, or when the platform doesn't expose a label
+  /// (some permission states return an anonymous track).
+  readonly inputLabel: string;
 }
 
 export interface AudioRecorderOptions {
@@ -30,6 +35,7 @@ export async function createAudioRecorder(
   let processor: ScriptProcessorNode | null = null;
   const chunks: Float32Array[] = [];
   let recording = false;
+  let inputLabel = '';
 
   const sampleRate = ctx.sampleRate;
 
@@ -42,6 +48,8 @@ export async function createAudioRecorder(
         : true,
     };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
+    const audioTrack = stream.getAudioTracks()[0];
+    inputLabel = audioTrack?.label ?? '';
     source = ctx.createMediaStreamSource(stream);
     // 4096 samples ≈ 85 ms at 48 kHz — coarse but reliable. M9 polish
     // swaps in an AudioWorkletNode for sample-accurate capture.
@@ -94,6 +102,9 @@ export async function createAudioRecorder(
     sampleRate,
     get recording() {
       return recording;
+    },
+    get inputLabel() {
+      return inputLabel;
     },
   };
 }

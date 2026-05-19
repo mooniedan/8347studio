@@ -200,6 +200,22 @@
     const t = project.trackById.get(id);
     return (t?.get('kind') as string | undefined) ?? null;
   });
+  /// Phase-10 M5 — reactive mirror of `meta.armedTrackId` so the
+  /// AudioTrackView can paint the armed-not-recording glow. Read
+  /// directly from Y.Doc; meta.observe drives the refresh.
+  let armedTrackVersion = $state(0);
+  $effect(() => {
+    const p = project;
+    if (!p) return;
+    const bump = () => { armedTrackVersion++; };
+    p.meta.observe(bump);
+    return () => p.meta.unobserve(bump);
+  });
+  let isAudioTrackArmed = $derived.by((): boolean => {
+    void armedTrackVersion;
+    if (!project || selectedTrackKind !== 'Audio') return false;
+    return getArmedTrackIdx(project) === selectedTrackIdx;
+  });
   // Track-color accent strip on the canvas header (Phase 7 M3) —
   // surfaces the selected track's identity color across all editor
   // views without each editor needing to know about it. Sourced from
@@ -239,6 +255,12 @@
   // as the MIDI multi-arm item.
   let audioRecorderInstance: AudioRecorder | null = null;
   let audioRecordingTrackIdx = $state<number | null>(null);
+  /// Phase-10 M5 — start time of the in-flight take in ms (Date.now)
+  /// + the human-readable input label, both surfaced to
+  /// AudioTrackView so it can render the growing striped placeholder
+  /// + the "● REC from <device>" header during recording.
+  let audioRecordingStartedAtMs = $state<number | null>(null);
+  let audioRecordingInputLabel = $state<string | null>(null);
 
   async function toggleAudioRecord(trackIdx: number): Promise<void> {
     if (!project) return;
@@ -248,6 +270,8 @@
       audioRecorderInstance.destroy();
       audioRecorderInstance = null;
       audioRecordingTrackIdx = null;
+      audioRecordingStartedAtMs = null;
+      audioRecordingInputLabel = null;
       if (pcm.length > 0) {
         await recordPcmIntoTrack(trackIdx, pcm, sampleRate);
       }
@@ -259,6 +283,8 @@
     await recorder.start();
     audioRecorderInstance = recorder;
     audioRecordingTrackIdx = trackIdx;
+    audioRecordingStartedAtMs = Date.now();
+    audioRecordingInputLabel = recorder.inputLabel || 'Default input';
   }
 
   /// Phase-5 M5: drop captured Float32 PCM into the addressed Audio
@@ -800,6 +826,11 @@
     peerAwareness: () => peerAwareness,
     importAssetIntoTrack,
     recordPcmIntoTrack,
+    setMockRecording: (trackIdx, label, startedAtMs) => {
+      audioRecordingTrackIdx = trackIdx;
+      audioRecordingInputLabel = label;
+      audioRecordingStartedAtMs = startedAtMs;
+    },
   });
 </script>
 
@@ -1085,7 +1116,10 @@
               <AudioTrackView
                 {project}
                 trackIdx={selectedTrackIdx}
+                armed={isAudioTrackArmed}
                 recording={audioRecordingTrackIdx === selectedTrackIdx}
+                recordingStartedAtMs={audioRecordingTrackIdx === selectedTrackIdx ? audioRecordingStartedAtMs : null}
+                inputLabel={audioRecordingTrackIdx === selectedTrackIdx ? audioRecordingInputLabel : null}
                 onToggleRecord={() => toggleAudioRecord(selectedTrackIdx)}
               />
               <AutomationLanes {project} trackIdx={selectedTrackIdx} />

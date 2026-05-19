@@ -81,6 +81,14 @@ export interface DebugBridgeDeps {
     pcm: Float32Array,
     sampleRate: number,
   ) => Promise<unknown>;
+  /// Phase-10 M5 test hook. Lets specs flip the audio-recording
+  /// visual state without calling `getUserMedia` (which Playwright
+  /// can't grant). Production code never invokes this.
+  setMockRecording: (
+    trackIdx: number | null,
+    inputLabel: string | null,
+    startedAtMs: number | null,
+  ) => void;
 }
 
 function withProject<T>(
@@ -319,6 +327,7 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
       ),
     // Phase-5 M5: bypass-getUserMedia path for tests.
     recordPcmIntoTrack: deps.recordPcmIntoTrack,
+    setMockRecording: deps.setMockRecording,
     // Phase-6 M1+M2: in-page satellite for tests.
     createSatelliteForTest: () => withProject(deps, (p) => {
       const sat = attachSatelliteSync(p.doc);
