@@ -146,7 +146,7 @@
   ///   - `resize` — pointer-down near the right edge of an existing
   ///     note's last cell. Anchor stays at the note's startTick; the
   ///     end follows the pointer. Commit updates lengthTicks.
-  type DragKind = 'create' | 'move' | 'resize';
+  type DragKind = 'create' | 'move' | 'resize' | 'select';
   interface Drag {
     kind: DragKind;
     startCol: number;
@@ -157,6 +157,57 @@
     orig?: PianoRollNote;
   }
   let drag = $state<Drag | null>(null);
+
+  /// Phase-10 M2d — multi-select.
+  ///
+  /// `selectedNotes` keys notes by `"<pitch>:<startTick>"` so the set
+  /// survives Y.Doc reorderings (the array index moves around when
+  /// notes are added/removed, but pitch + startTick is unique within
+  /// a clip). Selection is purely view-side state — it doesn't go
+  /// into the Y.Doc.
+  let selectedNotes = $state<Set<string>>(new Set());
+
+  /// Drop any selection keys whose underlying note no longer exists
+  /// (e.g. another peer deleted them, or move/resize replaced them
+  /// with a new identity). Runs whenever `notes` changes; the
+  /// selectedNotes read is untracked so reassigning the set from
+  /// inside this effect doesn't retrigger it.
+  $effect(() => {
+    const alive = new Set<string>();
+    for (const n of notes) alive.add(`${n.pitch}:${n.startTick}`);
+    untrack(() => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const k of selectedNotes) {
+        if (alive.has(k)) next.add(k);
+        else changed = true;
+      }
+      if (changed) selectedNotes = next;
+    });
+  });
+
+  function noteKey(n: { pitch: number; startTick: number }): string {
+    return `${n.pitch}:${n.startTick}`;
+  }
+
+  function clearSelection() {
+    if (selectedNotes.size > 0) selectedNotes = new Set();
+  }
+
+  /// Bounds of an in-flight select-rect, normalized so we can use
+  /// `from <= to` comparisons regardless of drag direction. Returns
+  /// `null` if no select drag is active.
+  function selectRectBounds(): {
+    minCol: number; maxCol: number; minMidi: number; maxMidi: number;
+  } | null {
+    if (!drag || drag.kind !== 'select') return null;
+    return {
+      minCol: Math.min(drag.startCol, drag.currCol),
+      maxCol: Math.max(drag.startCol, drag.currCol),
+      minMidi: Math.min(drag.startMidi, drag.currMidi),
+      maxMidi: Math.max(drag.startMidi, drag.currMidi),
+    };
+  }
 
   /// Computed ghost span — what cells the in-flight drag would paint.
   /// Returns `null` when there's no drag or when the kind has no
@@ -186,6 +237,16 @@
       return col >= newStart && col < newStart + spanCols;
     }
     return false;
+  }
+
+  /// True when `(col, midi)` is inside the in-flight select-rect.
+  /// Drives the translucent rectangle preview the user sees while
+  /// shift-dragging across the grid.
+  function inSelectRect(col: number, midi: number): boolean {
+    const b = selectRectBounds();
+    if (!b) return false;
+    return col >= b.minCol && col <= b.maxCol
+        && midi >= b.minMidi && midi <= b.maxMidi;
   }
 
   /// True when `(col, midi)` is the leftmost cell of the ghost span —
@@ -232,6 +293,21 @@
     const target = e.currentTarget as HTMLElement;
     try { target.setPointerCapture(e.pointerId); } catch { /* synthetic event */ }
 
+    // Shift always means "selection mode" — never enters move /
+    // resize / create. The kind=='select' commit decides between
+    // toggle (no drag) and rect (any movement).
+    if (e.shiftKey) {
+      drag = {
+        kind: 'select',
+        startCol: col,
+        startMidi: midi,
+        currCol: col,
+        currMidi: midi,
+        orig: existing ?? undefined,
+      };
+      return;
+    }
+
     if (existing) {
       const startCol = existing.startTick / STEP_TICKS;
       const spanCols = existing.lengthTicks / STEP_TICKS;
@@ -277,7 +353,7 @@
       // create / resize stay on the original pitch row.
       drag = { ...drag, currCol: col, currMidi: drag.startMidi };
     } else {
-      // move tracks both col and midi.
+      // move + select track both col and midi.
       drag = { ...drag, currCol: col, currMidi: midi };
     }
   }
@@ -297,6 +373,39 @@
     const clip = getPianoRollClipForTrack(project, trackIdx);
     if (!clip) return;
 
+    // Shift-drag → multi-select. Shift-click on a note → toggle that
+    // note in the selection (zero-delta path). Shift-click on empty
+    // → clear selection.
+    if (d.kind === 'select') {
+      if (d.startCol === d.currCol && d.startMidi === d.currMidi) {
+        if (d.orig) {
+          const k = noteKey(d.orig);
+          const next = new Set(selectedNotes);
+          if (next.has(k)) next.delete(k); else next.add(k);
+          selectedNotes = next;
+        } else {
+          clearSelection();
+        }
+        return;
+      }
+      // Drag → rect. Collect every note whose pitch is in the rect
+      // and whose tick-span overlaps the rect's column range.
+      const minCol = Math.min(d.startCol, d.currCol);
+      const maxCol = Math.max(d.startCol, d.currCol);
+      const minMidi = Math.min(d.startMidi, d.currMidi);
+      const maxMidi = Math.max(d.startMidi, d.currMidi);
+      const next = new Set<string>();
+      for (const n of notes) {
+        if (n.pitch < minMidi || n.pitch > maxMidi) continue;
+        const noteStartCol = n.startTick / STEP_TICKS;
+        const noteEndCol = noteStartCol + n.lengthTicks / STEP_TICKS - 1;
+        if (noteEndCol < minCol || noteStartCol > maxCol) continue;
+        next.add(noteKey(n));
+      }
+      selectedNotes = next;
+      return;
+    }
+
     // Pointer-down on an existing note that never moved is a tap-to-
     // remove (preserves legacy click-anywhere-on-note → delete from
     // M2a). Move and resize both reach this branch when dCol/dMidi
@@ -308,6 +417,7 @@
       d.startMidi === d.currMidi
     ) {
       removePianoRollNoteAt(project, clip, d.orig.pitch, d.orig.startTick);
+      clearSelection();
       return;
     }
 
@@ -455,6 +565,42 @@
     };
   });
 
+  /// Phase-10 M2d — Delete / Backspace removes every selected note.
+  /// The listener is window-scoped because the piano-roll itself
+  /// isn't focused; we guard by checking that the active element
+  /// isn't a text input so typing in name fields doesn't clobber
+  /// selection. Each delete goes through `removePianoRollNoteAt` so
+  /// the Y.Doc transaction list mirrors what one-at-a-time clicks
+  /// would have produced.
+  $effect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (selectedNotes.size === 0) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active) {
+        const tag = active.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable) {
+          return;
+        }
+      }
+      const clip = getPianoRollClipForTrack(project, trackIdx);
+      if (!clip) return;
+      e.preventDefault();
+      const keys = Array.from(selectedNotes);
+      project.doc.transact(() => {
+        for (const k of keys) {
+          const [pitchStr, startStr] = k.split(':');
+          removePianoRollNoteAt(
+            project, clip, Number(pitchStr), Number(startStr),
+          );
+        }
+      });
+      selectedNotes = new Set();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   // Drive the column-highlight playhead from engine current_tick.
   // The grid scales to the clip's `lengthTicks`; the playhead
   // column wraps through that range so notes outside the
@@ -506,6 +652,8 @@
           {@const isNoteStart = showOn && covering?.startTick === c * STEP_TICKS}
           {@const inGhost = ghostFor(c, row.midi)}
           {@const ghostStart = inGhost && isGhostStart(c, row.midi)}
+          {@const inRect = inSelectRect(c, row.midi)}
+          {@const cellSelected = Boolean(covering) && selectedNotes.has(noteKey(covering!))}
           <button
             class="cell"
             class:black-row={row.isAccent}
@@ -513,6 +661,8 @@
             class:on={showOn}
             class:note-start={isNoteStart || ghostStart}
             class:ghost={inGhost}
+            class:select-rect={inRect}
+            class:selected={cellSelected}
             class:playhead={c === playheadCol}
             class:peer-hover={peerColor != null}
             style="grid-row: {r + 1}; grid-column: {c + 1};{peerColor ? ` --peer-color: ${peerColor};` : ''}"
@@ -663,6 +813,24 @@
      peer is hovering this cell. */
   .cell.peer-hover {
     box-shadow: inset 0 0 0 2px var(--peer-color, var(--accent-hi));
+  }
+  /* Phase-10 M2d — selection rect preview while shift-dragging. The
+     rect is drawn cell-by-cell to stay aligned with the grid; the
+     tint stacks under .on so users still see notes inside the rect. */
+  .cell.select-rect {
+    background: rgba(120, 200, 255, 0.18);
+  }
+  .cell.on.select-rect {
+    background: #ff8c00;
+    box-shadow: inset 0 0 0 1px rgba(120, 200, 255, 0.9);
+  }
+  /* Selected notes get a cyan outline so they stand out against the
+     orange `.on` fill. */
+  .cell.selected {
+    box-shadow: inset 0 0 0 2px #7ad7ff;
+  }
+  .cell.selected.playhead {
+    box-shadow: inset 0 0 0 2px #7ad7ff, inset 0 0 0 4px #ffd84a;
   }
   /* Phase-10 M2c — velocity lane.
      Each `.vel-bar` sits at the bottom of its grid column, growing

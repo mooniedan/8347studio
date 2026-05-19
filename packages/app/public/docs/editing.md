@@ -51,6 +51,18 @@ is one MIDI pitch; each column is a 1/16 step.
 - Notes inside the playhead column show a **brighter accent**, so
   you can see exactly which note is firing right now.
 
+### Selection + multi-delete
+
+- **Shift+click** a note → toggle it in/out of the selection. A
+  selected note carries a cyan outline.
+- **Shift+drag** across the grid → draw a selection rectangle.
+  Every note that overlaps the rect (in both pitch and tick range)
+  joins the selection on release.
+- **Delete** or **Backspace** → remove every selected note in one
+  Y.Doc transaction.
+- Selection is per-clip view state — it doesn't sync over collab,
+  so each user picks their own working set.
+
 ### Velocity lane
 
 Below the piano-roll grid sits a **per-note velocity lane** — one
@@ -61,8 +73,8 @@ project and the engine plays the next pass at the new level. Multi-
 step notes show their bar at the start column only — the rest of
 the span follows automatically.
 
-> _Selection rectangle + multi-select and a right-pane note
-> inspector are tracked in the next slices of Phase 10 M2._
+> _A right-pane note inspector is tracked in a later slice of
+> Phase 10._
 
 ## Drum-row view
 
