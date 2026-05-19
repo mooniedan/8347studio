@@ -79,20 +79,16 @@
   import * as audio from './lib/audio';
   import {
     attachBridge,
-    attachWasmPluginToTrack,
-    detachWasmPluginFromTrack,
     setHandleForManifestLookup,
     type Bridge,
   } from './lib/engine-bridge';
-  import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
-  import { parseManifest, type ParseResult } from './lib/plugin-manifest';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
   import { buildMidiHandler } from './lib/midi-routing';
   import * as assetStore from './lib/asset-store';
   import { enrichDemoSong } from './lib/demo-enrichment';
+  import { attachWindowDebug } from './lib/debug-bridge';
   import {
     attachRootSync,
-    attachSatelliteSync,
     type AwarenessState,
     type RootHandle,
     type SatelliteIntent,
@@ -779,314 +775,31 @@
     recBuffer = [];
   }
 
-  function exposeDebugHandle(p: Project) {
-    Object.defineProperty(window, '__project', {
-      configurable: true,
-      get() {
-        const firstClipId = p.clipById.keys().next().value as string | undefined;
-        const firstClip = firstClipId ? p.clipById.get(firstClipId) : null;
-        const trackId = p.tracks.length > 0 ? p.tracks.get(0) : null;
-        const track = trackId ? p.trackById.get(trackId) : null;
-        return {
-          trackCount: p.tracks.length,
-          clipCount: p.clipById.size,
-          firstClipKind: firstClip?.get('kind') ?? null,
-          firstTrackGain: track?.get('gain') ?? null,
-          projectName: (p.meta.get('name') as string | undefined) ?? null,
-          loopRegion: getLoopRegion(p),
-        };
-      },
-    });
-  }
+  // Test-only debug surface (window.__project + window.__bridge) is
+  // installed via attachWindowDebug below — see `lib/debug-bridge.ts`
+  // for the full list of test entry points. exposeDebugHandle is a
+  // stub kept so bootProject reads naturally; the real wiring is the
+  // single attachWindowDebug call at the bottom of this script.
+  function exposeDebugHandle(_p: Project) { /* see attachWindowDebug */ }
 
-  function exposeBridgeHandle(b: Bridge) {
-    Object.defineProperty(window, '__bridge', {
-      configurable: true,
-      get() {
-        return {
-          rebuild: () => b.rebuild(),
-          setTransport: (play: boolean) => b.setTransport(play),
-          debugTrackGain: (track: number) => audio.debugRead('trackGain', track),
-          debugTrackCount: () => audio.debugRead('trackCount'),
-          debugMasterGain: () => audio.debugRead('masterGain'),
-          debugCurrentTick: () => audio.debugRead('currentTick'),
-          debugBpm: () => audio.debugRead('bpm'),
-          debugLoopEnd: () => audio.debugRead('loopEnd'),
-          debugTrackPeak: (track: number) => audio.debugRead('trackPeak', track),
-          debugTrackParam: (track: number, paramId: number) =>
-            audio.debugTrackParam(track, paramId),
-          /// Phase-8 M8 — UI now drives synth params via Knob/Slider
-          /// components rather than range-input element values. Tests
-          /// that need to write a param go through this Y.Doc path so
-          /// the round-trip (Y.Doc → SAB → engine) stays exercised.
-          setSynthParam: (track: number, paramId: number, value: number) => {
-            if (!project) return;
-            setSynthParam(project, track, paramId, value);
-          },
-          setParam: (track: number, paramId: number, value: number) =>
-            b.setParam(track, paramId, value),
-          addSubtractiveTrack: () => {
-            if (!project) return -1;
-            addSubtractiveTrack(project);
-            return project.tracks.length - 1;
-          },
-          createPluginUiHost: (trackIdx: number): PluginHost | null => {
-            if (!project) return null;
-            return createPluginUiHost(project, trackIdx);
-          },
-          noteOn: (track: number, pitch: number, velocity: number) =>
-            b.noteOn(track, pitch, velocity),
-          noteOff: (track: number, pitch: number) => b.noteOff(track, pitch),
-          midiCc: (track: number, cc: number, value: number) => b.midiCc(track, cc, value),
-          /// Test backdoor: simulate a raw MIDI message on the input
-          /// path. Bypasses requestMIDIAccess so Playwright can drive
-          /// the decode logic.
-          midiSimulate: (data: number[]) => midi?.simulate(data),
-          isRecording: () => recording,
-          /// Test affordance: dump the current note set on a track's
-          /// PianoRoll clip. Lets the M3 spec assert the recording
-          /// committed correctly without reaching into Y.Doc directly.
-          getPianoRollNotes: (trackIdx: number) => {
-            if (!project) return [];
-            const clip = getPianoRollClipForTrack(project, trackIdx);
-            return clip ? readPianoRollNotes(clip) : [];
-          },
-          // Phase-10 M1 — per-step velocity readout for the demo
-          // assertion. Returns null when the track has no step-seq
-          // clip (e.g. piano-roll-only tracks).
-          stepVelocities: (trackIdx: number) => {
-            if (!project) return null;
-            const clip = getStepSeqClipForTrack(project, trackIdx);
-            return clip ? readStepVelocities(clip) : null;
-          },
-          // Phase-4 M4 automation backdoor. Phase-9 polish lays a real
-          // graphical lane editor; today we expose the data path so
-          // tests can exercise the engine evaluation.
-          addAutomationPoint: (
-            trackIdx: number,
-            target: AutoTargetKind,
-            slotIdx: number,
-            paramId: number,
-            tick: number,
-            value: number,
-          ) => {
-            if (!project) return;
-            addAutomationPoint(project, trackIdx, target, slotIdx, paramId, { tick, value });
-          },
-          removeAutomationPoint: (
-            trackIdx: number,
-            target: AutoTargetKind,
-            slotIdx: number,
-            paramId: number,
-            pointIdx: number,
-          ) => {
-            if (!project) return;
-            removeAutomationPoint(project, trackIdx, target, slotIdx, paramId, pointIdx);
-          },
-          listAutomationLanes: () => {
-            if (!project) return [];
-            return listAutomationLanes(project);
-          },
-          /// Test affordance — flat snapshot of per-track inserts/sends/
-          /// names so the demo-song spec can assert the seeded shape
-          /// without reaching into the Y.Doc.
-          inspectTracks: () => {
-            if (!project) return [];
-            const out: Array<{
-              idx: number;
-              name: string;
-              color: string;
-              inserts: { kind: string }[];
-              sends: { targetTrackIdx: number; level: number }[];
-            }> = [];
-            for (let i = 0; i < project.tracks.length; i++) {
-              out.push({
-                idx: i,
-                name: getTrackName(project, i),
-                color: getTrackColor(project, i),
-                inserts: getTrackInserts(project, i).map((s) => ({ kind: s.kind })),
-                sends: getTrackSends(project, i).map((s) => ({
-                  targetTrackIdx: s.targetTrackIdx,
-                  level: s.level,
-                })),
-              });
-            }
-            return out;
-          },
-          /// Phase-3 M4 — inspector backdoor for the demo-song spec to
-          /// assert the seeded `CC#74 → lead filter cutoff` binding.
-          getMidiBinding: (cc: number) => {
-            if (!project) return null;
-            return getMidiBinding(project, cc);
-          },
-          /// Phase-8 M1 — schema validator backdoor. Pure function;
-          /// safe to expose. Used by tests/phase-8-manifest.spec.ts.
-          parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
-          /// Phase-8 M5b — test backdoor: write a manifest into
-          /// `meta.installedPlugins` directly. Used by the failure
-          /// spec to inject a manifest with a bogus wasm URL so
-          /// reload-time re-registration fails predictably.
-          _testRecordInstalledPlugin: (manifestId: string, manifestJson: string) => {
-            if (!project) return;
-            recordInstalledPlugin(project, manifestId, manifestJson);
-          },
-          /// Phase-8 M3b — load a third-party WASM plugin into the
-          /// worklet and return the handle. Used by the e2e test;
-          /// in production the picker UI (M5) will drive this with
-          /// fetched + integrity-verified bytes from a manifest.
-          loadWasmPlugin: async (
-            bytes: Uint8Array,
-            opts?: { maxBlockSize?: number; inChannels?: number; outChannels?: number },
-          ): Promise<number> => audio.postLoadWasmPlugin(bytes, opts),
-          unloadWasmPlugin: (handle: number) => audio.postUnloadWasmPlugin(handle),
-          /// Bind a worklet-assigned wasm handle to a track. The
-          /// engine-bridge picks it up on the next snapshot push and
-          /// the engine builds a WasmPlugin for that track.
-          attachWasmPluginToTrack: (
-            trackIdx: number,
-            handle: number,
-            isInstrument: boolean,
-          ) => {
-            if (!project) return;
-            if (trackIdx < 0 || trackIdx >= project.tracks.length) return;
-            const trackId = project.tracks.get(trackIdx);
-            attachWasmPluginToTrack(trackId, handle, isInstrument);
-            bridge?.rebuild();
-          },
-          detachWasmPluginFromTrack: (trackIdx: number) => {
-            if (!project) return;
-            if (trackIdx < 0 || trackIdx >= project.tracks.length) return;
-            const trackId = project.tracks.get(trackIdx);
-            detachWasmPluginFromTrack(trackId);
-            bridge?.rebuild();
-          },
-          /// Phase-8 M6 — attach a worklet-loaded WASM plugin to a
-          /// track as an insert (effect-chain slot). Returns the
-          /// new slot index. Tests use this to wire up a Bitcrusher
-          /// on a synth track without going through M5's picker UI.
-          addWasmInsert: (trackIdx: number, handle: number): number => {
-            if (!project) return -1;
-            addWasmInsert(project, trackIdx, handle);
-            const trackId = project.tracks.get(trackIdx);
-            const track = project.trackById.get(trackId);
-            const inserts = track?.get('inserts') as { length: number } | undefined;
-            return (inserts?.length ?? 0) - 1;
-          },
-          setInsertParam: (
-            trackIdx: number,
-            slotIdx: number,
-            paramId: number,
-            value: number,
-          ) => {
-            if (!project) return;
-            setInsertParam(project, trackIdx, slotIdx, paramId, value);
-          },
-          // Phase-5 M2: OPFS asset store + register_asset path.
-          assetStorePut: (bytes: Uint8Array) => assetStore.putBytes(bytes),
-          assetStoreHas: (hash: string) => assetStore.has(hash),
-          assetStoreList: () => assetStore.list(),
-          registerAssetPcm: (assetId: number, pcm: Float32Array) =>
-            audio.postRegisterAsset(assetId, pcm),
-          debugAssetCount: () => audio.debugRead('assetCount'),
-          // Phase-5 M3: import an asset into an Audio track.
-          importAssetIntoTrack: (
-            trackIdx: number,
-            bytes: Uint8Array,
-            filename: string,
-          ) => importAssetIntoTrack(trackIdx, bytes, filename),
-          getAudioRegions: (trackIdx: number) => {
-            if (!project) return [];
-            return getAudioRegions(project, trackIdx);
-          },
-          // Phase-5 M5: bypass-getUserMedia path for tests.
-          recordPcmIntoTrack: (
-            trackIdx: number,
-            pcm: Float32Array,
-            sampleRate: number,
-          ) => recordPcmIntoTrack(trackIdx, pcm, sampleRate),
-          // Phase-6 M1+M2: in-page satellite for tests. Creates a
-          // satellite handle bound to the same BroadcastChannel root
-          // is listening on; the test exercises the dispatch path.
-          createSatelliteForTest: () => {
-            if (!project) return null;
-            const sat = attachSatelliteSync(project.doc);
-            return {
-              dispatch: (intent: SatelliteIntent) => sat.dispatch(intent),
-              destroy: () => sat.destroy(),
-            };
-          },
-          // Phase-6 M3: feature-detect + bindings smoke test for the
-          // PIP transport. The real "open a PIP window" path needs a
-          // user gesture in browsers that support Document PIP at
-          // all; tests just verify the bindings produced are wired.
-          isPipSupported: () => isPipSupported(),
-          pipPlay: () => {
-            const c = ensurePipController();
-            void c;
-            if (!bridge) return;
-            pipPlaying = true;
-            bridge.setTransport(true);
-          },
-          pipStop: () => {
-            if (!bridge) return;
-            pipPlaying = false;
-            bridge.setTransport(false);
-          },
-          // Phase-6 M5 awareness inspectors.
-          publishedPlayheadTick: () => publishedPlayheadTick,
-          peerAwareness: () => peerAwareness,
-          // Phase-4 M5 Container backdoor. UI for branch editing is
-          // deferred to a Phase-9 polish pass.
-          addContainerInsert: (trackIdx: number) => {
-            if (!project) return;
-            addInsert(project, trackIdx, 'builtin:container');
-          },
-          addContainerSubInsert: (
-            trackIdx: number,
-            slotIdx: number,
-            branchIdx: number,
-            kind:
-              | 'builtin:gain'
-              | 'builtin:eq'
-              | 'builtin:compressor'
-              | 'builtin:reverb'
-              | 'builtin:delay',
-          ) => {
-            if (!project) return;
-            addContainerSubInsert(project, trackIdx, slotIdx, branchIdx, kind);
-          },
-          setContainerBranchGain: (
-            trackIdx: number,
-            slotIdx: number,
-            branchIdx: number,
-            gain: number,
-          ) => {
-            if (!project) return;
-            setContainerBranchGain(project, trackIdx, slotIdx, branchIdx, gain);
-          },
-          setContainerSubInsertParam: (
-            trackIdx: number,
-            slotIdx: number,
-            branchIdx: number,
-            subIdx: number,
-            paramId: number,
-            value: number,
-          ) => {
-            if (!project) return;
-            setContainerSubInsertParam(
-              project,
-              trackIdx,
-              slotIdx,
-              branchIdx,
-              subIdx,
-              paramId,
-              value,
-            );
-          },
-        };
-      },
-    });
-  }
+  function exposeBridgeHandle(_b: Bridge) { /* see attachWindowDebug */ }
+
+  // Wire the test-only window.__project + window.__bridge once at
+  // mount. Getters re-evaluate every access so the surface always
+  // reflects the current project / bridge / recording state — no
+  // need to re-attach on switchProject.
+  attachWindowDebug({
+    project: () => project,
+    bridge: () => bridge,
+    midi: () => midi,
+    recording: () => recording,
+    pipSetPlaying: (on) => { pipPlaying = on; },
+    ensurePipController,
+    publishedPlayheadTick: () => publishedPlayheadTick,
+    peerAwareness: () => peerAwareness,
+    importAssetIntoTrack,
+    recordPcmIntoTrack,
+  });
 </script>
 
 {#await ready}
