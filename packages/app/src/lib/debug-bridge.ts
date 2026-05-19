@@ -31,6 +31,7 @@ import {
   addSubtractiveTrack,
   addWasmInsert,
   getAudioRegions,
+  setAudioRegionFade,
   getLoopRegion,
   getMidiBinding,
   getPianoRollClipForTrack,
@@ -282,6 +283,17 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
     importAssetIntoTrack: deps.importAssetIntoTrack,
     getAudioRegions: (trackIdx: number) =>
       withProject(deps, (p) => getAudioRegions(p, trackIdx), []),
+    setAudioRegionFade: (
+      trackIdx: number,
+      regionIdx: number,
+      which: 'in' | 'out',
+      samples: number,
+    ) =>
+      withProject(
+        deps,
+        (p) => setAudioRegionFade(p, trackIdx, regionIdx, which, samples),
+        false,
+      ),
     // Phase-5 M5: bypass-getUserMedia path for tests.
     recordPcmIntoTrack: deps.recordPcmIntoTrack,
     // Phase-6 M1+M2: in-page satellite for tests.

@@ -108,6 +108,12 @@
           {@const m = meta(r.assetHash)}
           {@const leftPx = r.startTick * PX_PER_TICK}
           {@const widthPx = Math.max(8, r.lengthTicks * PX_PER_TICK)}
+          {@const fadeInPx = r.lengthSamples > 0
+            ? (r.fadeInSamples / r.lengthSamples) * widthPx
+            : 0}
+          {@const fadeOutPx = r.lengthSamples > 0
+            ? (r.fadeOutSamples / r.lengthSamples) * widthPx
+            : 0}
           <div
             class="region"
             data-testid={`audio-region-${trackIdx}-${i}`}
@@ -115,6 +121,30 @@
             title={m?.sourceFilename ?? r.assetHash}
           >
             <Waveform hash={r.assetHash} widthPx={widthPx} />
+            {#if fadeInPx > 0}
+              <!--
+                Phase-10 M3b — fade-in corner overlay. The triangle
+                masks the leading edge of the waveform; its hypotenuse
+                represents the linear gain curve ramping from 0 to 1.
+                The companion `.fade-curve` is a thin orange line that
+                traces the same edge so the curve is legible even at
+                short fade lengths.
+              -->
+              <div
+                class="fade fade-in"
+                data-testid={`audio-region-${trackIdx}-${i}-fade-in`}
+                style="width: {fadeInPx}px;"
+                aria-label="Fade in"
+              ></div>
+            {/if}
+            {#if fadeOutPx > 0}
+              <div
+                class="fade fade-out"
+                data-testid={`audio-region-${trackIdx}-${i}-fade-out`}
+                style="width: {fadeOutPx}px;"
+                aria-label="Fade out"
+              ></div>
+            {/if}
             <span class="region-label">
               <span class="hash">{shortHash(r.assetHash)}</span>
               {#if m}
@@ -225,6 +255,27 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+  /* Phase-10 M3b — fade overlays.
+     `clip-path: polygon(...)` carves a triangle out of the otherwise
+     opaque dark mask: the unmasked portion is what the audio gain
+     curve has *muted*. The fade-in's apex is at the leading edge;
+     the fade-out's apex is at the trailing edge. The orange
+     hairline traces the gain curve itself. */
+  .fade {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .fade-in {
+    left: 0;
+    clip-path: polygon(0% 0%, 100% 0%, 0% 100%);
+  }
+  .fade-out {
+    right: 0;
+    clip-path: polygon(0% 0%, 100% 0%, 100% 100%);
   }
   .region-label {
     position: absolute;

@@ -712,6 +712,30 @@ export function addAudioRegion(
   });
 }
 
+/// Per-region fade writer. `which` selects in/out; the sample value
+/// is clamped non-negative and capped at the region's length so a
+/// fade can never overlap the opposite end. Used by the inspector
+/// edit panel (Phase-10 M3d) and exposed via the debug bridge so
+/// tests + demo-song seeders can set fades without spinning up the
+/// UI.
+export function setAudioRegionFade(
+  p: Project,
+  trackIdx: number,
+  regionIdx: number,
+  which: 'in' | 'out',
+  samples: number,
+): boolean {
+  const arr = trackAudioRegionsArr(p, trackIdx);
+  if (!arr || regionIdx < 0 || regionIdx >= arr.length) return false;
+  const r = arr.get(regionIdx);
+  if (!r) return false;
+  const lengthSamples = (r.get('lengthSamples') as number | undefined) ?? 0;
+  const clamped = Math.max(0, Math.min(lengthSamples, Math.floor(samples)));
+  const field = which === 'in' ? 'fadeInSamples' : 'fadeOutSamples';
+  p.doc.transact(() => r.set(field, clamped));
+  return true;
+}
+
 export function getAudioRegions(p: Project, trackIdx: number): AudioRegionView[] {
   const arr = trackAudioRegionsArr(p, trackIdx);
   if (!arr) return [];

@@ -164,6 +164,26 @@ test.describe('demo song', () => {
       return w.__bridge.getAudioRegions(riserIdx).length;
     }), { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
 
+    // Phase-10 M3b — the riser ships with baked-in fades so the
+    // fade-overlay rendering path is exercised by ★ Demo Song. We
+    // don't pin exact sample counts; just confirm both are > 0.
+    const riserRegion = await page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: {
+          inspectTracks: () => { name: string }[];
+          getAudioRegions: (i: number) => {
+            fadeInSamples: number; fadeOutSamples: number;
+          }[];
+        };
+      };
+      const tracks = w.__bridge.inspectTracks();
+      const riserIdx = tracks.findIndex((t) => /riser/i.test(t.name));
+      return w.__bridge.getAudioRegions(riserIdx)[0] ?? null;
+    });
+    expect(riserRegion).not.toBeNull();
+    expect(riserRegion!.fadeInSamples).toBeGreaterThan(0);
+    expect(riserRegion!.fadeOutSamples).toBeGreaterThan(0);
+
     // Automation lane present on track 0.
     expect(await automationLaneCount(page)).toBeGreaterThanOrEqual(1);
 

@@ -104,5 +104,12 @@ bars match column-for-column.
   series (one column per pixel) into a `<canvas>`. Decoding + peak
   extraction is cached per asset hash, so duplicating a region or
   scrubbing the track list doesn't re-decode the file.
-- Region trimming, fade handles, and an inspector edit panel
-  (gain / fade times / sample range) ship in later M3 slices.
+- **Fade-in / fade-out overlays.** If a region's `fadeInSamples` or
+  `fadeOutSamples` is non-zero, a dark triangular mask covers the
+  faded portion of the waveform on the leading / trailing edge.
+  The mask width is proportional to the fade duration as a
+  fraction of the region length. Editable from the inspector panel
+  (later M3 slice); the ★ Demo Song's Riser ships with a 0.25 s
+  fade-in + 0.5 s fade-out so the look is visible out of the box.
+- Region trimming and an inspector edit panel (gain / fade times /
+  sample range) ship in later M3 slices.

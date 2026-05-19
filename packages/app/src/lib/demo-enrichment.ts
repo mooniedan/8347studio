@@ -17,6 +17,7 @@
 
 import {
   addAudioTrack,
+  setAudioRegionFade,
   addAutomationPoint,
   addWasmInsertByManifest,
   setInsertParam,
@@ -116,6 +117,13 @@ async function enrichWithAudioRiser(
   // Subtle in the mix — the bass + drums carry the energy.
   setTrackGain(project, audioIdx, 0.6);
   setTrackColor(project, audioIdx, TRACK_PALETTE[2]); // yellow
+
+  // Phase-10 M3b — bake in a 0.25 s fade-in + 0.5 s fade-out so the
+  // riser ramps up + tails off audibly, and so the cumulative demo
+  // exercises the fade-overlay rendering path. 48 kHz sample rate ×
+  // duration in seconds.
+  setAudioRegionFade(project, audioIdx, 0, 'in',  Math.round(0.25 * 48_000));
+  setAudioRegionFade(project, audioIdx, 0, 'out', Math.round(0.50 * 48_000));
 }
 
 /// Generate a 2 s 48 kHz mono pad-riser WAV (RIFF + 16-bit PCM).
