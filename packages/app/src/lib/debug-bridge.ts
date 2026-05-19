@@ -32,6 +32,8 @@ import {
   addWasmInsert,
   getAudioRegions,
   setAudioRegionFade,
+  updateAudioRegion,
+  type AudioRegionPatch,
   getLoopRegion,
   getMidiBinding,
   getPianoRollClipForTrack,
@@ -292,6 +294,16 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
       withProject(
         deps,
         (p) => setAudioRegionFade(p, trackIdx, regionIdx, which, samples),
+        false,
+      ),
+    updateAudioRegion: (
+      trackIdx: number,
+      regionIdx: number,
+      patch: AudioRegionPatch,
+    ) =>
+      withProject(
+        deps,
+        (p) => updateAudioRegion(p, trackIdx, regionIdx, patch),
         false,
       ),
     // Phase-5 M5: bypass-getUserMedia path for tests.

@@ -111,5 +111,16 @@ bars match column-for-column.
   fraction of the region length. Editable from the inspector panel
   (later M3 slice); the ★ Demo Song's Riser ships with a 0.25 s
   fade-in + 0.5 s fade-out so the look is visible out of the box.
-- Region trimming and an inspector edit panel (gain / fade times /
-  sample range) ship in later M3 slices.
+- **Drag the body** of a region → move it along the timeline.
+  Updates `startTick` (and `startSample` by the same ratio); the
+  drag snaps to one step (1/16) so regions line up with the grid.
+- **Drag the left edge** (a 6 px grip strip) → trim from the start.
+  Increases `startTick` + `assetOffsetSamples` and shrinks
+  `lengthTicks` + `lengthSamples` together so the trailing edge of
+  the audio stays glued to the same frame.
+- **Drag the right edge** → trim the end. Adjusts `lengthTicks` +
+  `lengthSamples` only; minimum length is one step.
+- All drags commit a single Y.Doc transaction on release, so collab
+  peers see one consistent update per gesture.
+- An inspector edit panel (gain, fade times, sample range, reverse,
+  loop, follow-tempo) ships in the next M3 slice.

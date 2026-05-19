@@ -712,6 +712,49 @@ export function addAudioRegion(
   });
 }
 
+/// Phase-10 M3c — audio-region geometry writer used by the drag-
+/// to-move + trim-handle UX. Patches are applied in a single
+/// transaction so peers see one consistent update per drag instead
+/// of a flurry. Negative / sub-minimum values are clamped here so
+/// the engine never sees a degenerate region.
+export interface AudioRegionPatch {
+  startTick?: number;
+  lengthTicks?: number;
+  startSample?: number;
+  lengthSamples?: number;
+  assetOffsetSamples?: number;
+}
+
+export function updateAudioRegion(
+  p: Project,
+  trackIdx: number,
+  regionIdx: number,
+  patch: AudioRegionPatch,
+): boolean {
+  const arr = trackAudioRegionsArr(p, trackIdx);
+  if (!arr || regionIdx < 0 || regionIdx >= arr.length) return false;
+  const r = arr.get(regionIdx);
+  if (!r) return false;
+  p.doc.transact(() => {
+    if (patch.startTick !== undefined) {
+      r.set('startTick', Math.max(0, Math.floor(patch.startTick)));
+    }
+    if (patch.lengthTicks !== undefined) {
+      r.set('lengthTicks', Math.max(1, Math.floor(patch.lengthTicks)));
+    }
+    if (patch.startSample !== undefined) {
+      r.set('startSample', Math.max(0, Math.floor(patch.startSample)));
+    }
+    if (patch.lengthSamples !== undefined) {
+      r.set('lengthSamples', Math.max(1, Math.floor(patch.lengthSamples)));
+    }
+    if (patch.assetOffsetSamples !== undefined) {
+      r.set('assetOffsetSamples', Math.max(0, Math.floor(patch.assetOffsetSamples)));
+    }
+  });
+  return true;
+}
+
 /// Per-region fade writer. `which` selects in/out; the sample value
 /// is clamped non-negative and capped at the region's length so a
 /// fade can never overlap the opposite end. Used by the inspector

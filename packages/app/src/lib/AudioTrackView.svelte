@@ -6,8 +6,10 @@
     type Project,
     type AudioRegionView,
     type AssetMetadataView,
+    type AudioRegionPatch,
     getAudioRegions,
     getAssetMetadata,
+    updateAudioRegion,
   } from './project';
   import Waveform from './Waveform.svelte';
 
@@ -76,6 +78,159 @@
   });
 
   const timelineWidthPx = $derived(totalTicks * PX_PER_TICK);
+
+  /// Phase-10 M3c — drag-to-move + trim handles.
+  ///
+  /// Three drag kinds:
+  ///   - `move`   — drag the region body to shift `startTick`.
+  ///   - `trim-l` — left-edge handle: increases startTick, decreases
+  ///     lengthTicks (and adjusts assetOffsetSamples so the right
+  ///     edge stays glued to the same audio frame).
+  ///   - `trim-r` — right-edge handle: adjusts lengthTicks only.
+  ///
+  /// During a drag the dragged region is rendered at the *preview*
+  /// position computed live from the pointer delta; on release we
+  /// flush a single `updateAudioRegion` transaction so collab peers
+  /// see one commit, not a flurry of frame-by-frame updates.
+  ///
+  /// Drags snap to STEP_TICKS (1/16 step) so regions align with the
+  /// grid by default. Holding shift would disable snap — deferred to
+  /// a later slice.
+  type RegionDragKind = 'move' | 'trim-l' | 'trim-r';
+  interface RegionDrag {
+    kind: RegionDragKind;
+    regionIdx: number;
+    startX: number;
+    origStartTick: number;
+    origLengthTicks: number;
+    origStartSample: number;
+    origLengthSamples: number;
+    origAssetOffset: number;
+    /// `lengthSamples / lengthTicks` snapshotted at pointerdown; we
+    /// keep the ratio constant so timeline edits stay in lockstep
+    /// with sample-domain edits. (When `lengthTicks` was 0 we fall
+    /// back to 1 so divisions don't NaN.)
+    samplesPerTick: number;
+    previewStartTick: number;
+    previewLengthTicks: number;
+  }
+  let regionDrag = $state<RegionDrag | null>(null);
+
+  function snapTicks(dxTicks: number): number {
+    return Math.round(dxTicks / STEP_TICKS) * STEP_TICKS;
+  }
+
+  function startRegionDrag(
+    e: PointerEvent,
+    regionIdx: number,
+    kind: RegionDragKind,
+  ): void {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const r = regions[regionIdx];
+    if (!r) return;
+    const target = e.currentTarget as HTMLElement;
+    try { target.setPointerCapture(e.pointerId); } catch { /* synthetic event */ }
+    const samplesPerTick = r.lengthTicks > 0 ? r.lengthSamples / r.lengthTicks : 1;
+    regionDrag = {
+      kind,
+      regionIdx,
+      startX: e.clientX,
+      origStartTick: r.startTick,
+      origLengthTicks: r.lengthTicks,
+      origStartSample: r.startSample,
+      origLengthSamples: r.lengthSamples,
+      origAssetOffset: r.assetOffsetSamples,
+      samplesPerTick,
+      previewStartTick: r.startTick,
+      previewLengthTicks: r.lengthTicks,
+    };
+  }
+
+  function onTimelinePointerMove(e: PointerEvent) {
+    const d = regionDrag;
+    if (!d) return;
+    const dxPx = e.clientX - d.startX;
+    const dxTicks = snapTicks(dxPx / PX_PER_TICK);
+    if (d.kind === 'move') {
+      const newStart = Math.max(0, d.origStartTick + dxTicks);
+      regionDrag = { ...d, previewStartTick: newStart, previewLengthTicks: d.origLengthTicks };
+      return;
+    }
+    if (d.kind === 'trim-r') {
+      const newLen = Math.max(STEP_TICKS, d.origLengthTicks + dxTicks);
+      regionDrag = { ...d, previewStartTick: d.origStartTick, previewLengthTicks: newLen };
+      return;
+    }
+    // trim-l: shift startTick up by appliedDx, decrease length by
+    // appliedDx. Clamp so startTick stays >= 0 and length >= 1 step.
+    let appliedDx = dxTicks;
+    if (d.origStartTick + appliedDx < 0) appliedDx = -d.origStartTick;
+    if (d.origLengthTicks - appliedDx < STEP_TICKS) {
+      appliedDx = d.origLengthTicks - STEP_TICKS;
+    }
+    regionDrag = {
+      ...d,
+      previewStartTick: d.origStartTick + appliedDx,
+      previewLengthTicks: d.origLengthTicks - appliedDx,
+    };
+  }
+
+  function onTimelinePointerUp(e: PointerEvent) {
+    const d = regionDrag;
+    if (!d) return;
+    regionDrag = null;
+    const target = e.currentTarget as HTMLElement;
+    if (target.hasPointerCapture(e.pointerId)) {
+      target.releasePointerCapture(e.pointerId);
+    }
+    commitRegionDrag(d);
+  }
+
+  function commitRegionDrag(d: RegionDrag): void {
+    const dStartTick = d.previewStartTick - d.origStartTick;
+    const dLengthTicks = d.previewLengthTicks - d.origLengthTicks;
+    if (dStartTick === 0 && dLengthTicks === 0) return;
+    const patch: AudioRegionPatch = {
+      startTick: d.previewStartTick,
+      lengthTicks: d.previewLengthTicks,
+    };
+    if (d.kind === 'move' && dStartTick !== 0) {
+      // Body drag — keep the same audio frames but slide the
+      // timeline position. assetOffsetSamples + lengthSamples
+      // unchanged; startSample shifts by the tick delta.
+      patch.startSample = Math.max(
+        0,
+        d.origStartSample + Math.round(dStartTick * d.samplesPerTick),
+      );
+    } else if (d.kind === 'trim-l') {
+      // Eat into the start of the asset: offset increases, length
+      // shrinks by the same sample delta.
+      const dSamples = Math.round(dStartTick * d.samplesPerTick);
+      patch.startSample = Math.max(0, d.origStartSample + dSamples);
+      patch.assetOffsetSamples = Math.max(0, d.origAssetOffset + dSamples);
+      patch.lengthSamples = Math.max(1, d.origLengthSamples - dSamples);
+    } else if (d.kind === 'trim-r') {
+      // Extend / shrink trailing edge in the sample domain.
+      const dSamples = Math.round(dLengthTicks * d.samplesPerTick);
+      patch.lengthSamples = Math.max(1, d.origLengthSamples + dSamples);
+    }
+    updateAudioRegion(project, trackIdx, d.regionIdx, patch);
+  }
+
+  function previewLeftPx(regionIdx: number, baseStartTick: number): number {
+    if (regionDrag && regionDrag.regionIdx === regionIdx) {
+      return regionDrag.previewStartTick * PX_PER_TICK;
+    }
+    return baseStartTick * PX_PER_TICK;
+  }
+
+  function previewWidthPx(regionIdx: number, baseLengthTicks: number): number {
+    if (regionDrag && regionDrag.regionIdx === regionIdx) {
+      return Math.max(8, regionDrag.previewLengthTicks * PX_PER_TICK);
+    }
+    return Math.max(8, baseLengthTicks * PX_PER_TICK);
+  }
 </script>
 
 <section class="audio-track" data-testid={`audio-track-${trackIdx}`}>
@@ -103,24 +258,50 @@
         class="timeline"
         style="width: {timelineWidthPx}px;"
         data-testid={`audio-timeline-${trackIdx}`}
+        onpointermove={onTimelinePointerMove}
+        onpointerup={onTimelinePointerUp}
+        onpointercancel={onTimelinePointerUp}
+        role="presentation"
       >
-        {#each regions as r, i (`${r.assetHash}:${r.startTick}:${i}`)}
+        {#each regions as r, i (`${r.assetHash}:${i}`)}
           {@const m = meta(r.assetHash)}
-          {@const leftPx = r.startTick * PX_PER_TICK}
-          {@const widthPx = Math.max(8, r.lengthTicks * PX_PER_TICK)}
+          {@const leftPx = previewLeftPx(i, r.startTick)}
+          {@const widthPx = previewWidthPx(i, r.lengthTicks)}
           {@const fadeInPx = r.lengthSamples > 0
             ? (r.fadeInSamples / r.lengthSamples) * widthPx
             : 0}
           {@const fadeOutPx = r.lengthSamples > 0
             ? (r.fadeOutSamples / r.lengthSamples) * widthPx
             : 0}
+          {@const dragging = regionDrag?.regionIdx === i}
           <div
             class="region"
+            class:dragging
             data-testid={`audio-region-${trackIdx}-${i}`}
             style="left: {leftPx}px; width: {widthPx}px;"
             title={m?.sourceFilename ?? r.assetHash}
+            onpointerdown={(e) => startRegionDrag(e, i, 'move')}
           >
             <Waveform hash={r.assetHash} widthPx={widthPx} />
+            <!--
+              Phase-10 M3c — trim handles. Two narrow strips on the
+              left + right edges intercept pointerdown and start a
+              `trim-l` / `trim-r` drag instead of the body's `move`.
+              The cursor changes to `ew-resize` on hover so the
+              affordance is discoverable.
+            -->
+            <div
+              class="handle handle-l"
+              data-testid={`audio-region-${trackIdx}-${i}-trim-l`}
+              onpointerdown={(e) => startRegionDrag(e, i, 'trim-l')}
+              role="presentation"
+            ></div>
+            <div
+              class="handle handle-r"
+              data-testid={`audio-region-${trackIdx}-${i}-trim-r`}
+              onpointerdown={(e) => startRegionDrag(e, i, 'trim-r')}
+              role="presentation"
+            ></div>
             {#if fadeInPx > 0}
               <!--
                 Phase-10 M3b — fade-in corner overlay. The triangle
@@ -255,6 +436,31 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    cursor: grab;
+    touch-action: none;
+  }
+  .region.dragging {
+    cursor: grabbing;
+    outline: 1px solid #ffd84a;
+  }
+  /* Phase-10 M3c — trim grips. The handle sits on top of the
+     waveform but stays narrow enough that the body still receives
+     pointerdown for `move`. `touch-action: none` lets the drag
+     start cleanly without the browser firing scroll gestures. */
+  .handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: ew-resize;
+    background: transparent;
+    touch-action: none;
+    z-index: 2;
+  }
+  .handle-l { left: 0; }
+  .handle-r { right: 0; }
+  .handle:hover {
+    background: rgba(255, 216, 74, 0.35);
   }
   /* Phase-10 M3b — fade overlays.
      `clip-path: polygon(...)` carves a triangle out of the otherwise
