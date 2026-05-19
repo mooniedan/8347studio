@@ -1,7 +1,15 @@
+use alloc::vec::Vec;
+
 use crate::oscillator::{Oscillator, Waveform};
 use crate::plugin::Plugin;
 
-const STEPS: u32 = 16;
+/// Default step count for a freshly-constructed Sequencer. Runtime
+/// callers (the engine via `set_step_mask` / `set_step_velocity`)
+/// grow the internal vectors lazily, so projects that record
+/// 8-step or 32-step patterns work without code changes here. The
+/// previous fixed `STEPS = 16` is retained as the default so behaviour
+/// for existing 16-step projects is unchanged.
+pub const DEFAULT_STEPS: u32 = 16;
 const NOTES: u32 = 25;
 const LOW_MIDI: u32 = 48; // C3; bit k of a step mask = MIDI note LOW_MIDI + k
 const MAX_VOICES: usize = 8;
@@ -118,11 +126,14 @@ pub struct Sequencer {
     voices: [Voice; MAX_VOICES],
     next_trigger_tick: u64,
     /// Per-step bitmask of active notes; bit k = MIDI note LOW_MIDI + k.
-    steps: [u32; STEPS as usize],
+    /// Length grows on demand as the host writes higher step indices,
+    /// matching the project clip's `stepCount` (Phase-10 M1 unlocks
+    /// 8/16/32-step patterns without recompiling the engine).
+    steps: Vec<u32>,
     /// Per-step velocity (1..=127). Phase-10 M1 — applied as a
     /// 0..1 gain multiplier on every voice triggered at that step.
     /// Defaults to 100 so legacy projects keep their existing loudness.
-    velocities: [u8; STEPS as usize],
+    velocities: Vec<u8>,
     current_step: u32,
     /// Ticks per step (PPQ-relative). Settable; default 240 (1/16 at PPQ=960).
     ticks_per_step: u32,
@@ -142,8 +153,8 @@ impl Sequencer {
         Self {
             voices,
             next_trigger_tick: 1,
-            steps: [0; STEPS as usize],
-            velocities: [100; STEPS as usize],
+            steps: alloc::vec![0; DEFAULT_STEPS as usize],
+            velocities: alloc::vec![100; DEFAULT_STEPS as usize],
             current_step: 0,
             ticks_per_step: DEFAULT_TICKS_PER_STEP,
             playing: false,
@@ -151,20 +162,29 @@ impl Sequencer {
         }
     }
 
-    /// Replace active notes at step `i` with `mask`.
-    /// Only the lower `NOTES` bits are honored.
+    /// Replace active notes at step `i` with `mask`. The internal
+    /// arrays grow lazily so callers can address higher indices than
+    /// the default 16-step layout (the snapshot's `steps.len()` is
+    /// the source of truth).
     pub fn set_step_mask(&mut self, i: u32, mask: u32) {
-        if (i as usize) < self.steps.len() {
-            self.steps[i as usize] = mask & ((1 << NOTES) - 1);
-        }
+        self.grow_to_at_least(i as usize + 1);
+        self.steps[i as usize] = mask & ((1 << NOTES) - 1);
     }
 
     /// Phase-10 M1 — per-step velocity (1..=127). 0 is treated as 1
     /// to avoid silent steps; the canonical way to silence a step
     /// is `set_step_mask(i, 0)`.
     pub fn set_step_velocity(&mut self, i: u32, velocity: u8) {
-        if (i as usize) < self.velocities.len() {
-            self.velocities[i as usize] = velocity.clamp(1, 127);
+        self.grow_to_at_least(i as usize + 1);
+        self.velocities[i as usize] = velocity.clamp(1, 127);
+    }
+
+    fn grow_to_at_least(&mut self, len: usize) {
+        if self.steps.len() < len {
+            self.steps.resize(len, 0);
+        }
+        if self.velocities.len() < len {
+            self.velocities.resize(len, 100);
         }
     }
 
@@ -202,12 +222,17 @@ impl Sequencer {
         if !self.playing {
             return;
         }
+        // Runtime step count — empty arrays are a no-op.
+        let n = self.steps.len() as u64;
+        if n == 0 {
+            return;
+        }
         let s = self.ticks_per_step as u64;
         // Force-fire the floor-step at prev_tick on the first call after
         // set_playing(true), even if no boundary falls inside the window
         // (covers the transport-resume-mid-step case).
         let mut t = if self.needs_initial_reconcile {
-            let step = ((prev_tick / s) % STEPS as u64) as u32;
+            let step = ((prev_tick / s) % n) as u32;
             self.current_step = step;
             let mask = self.steps[step as usize];
             let vel = self.velocities[step as usize];
@@ -222,8 +247,8 @@ impl Sequencer {
         // Safety cap: one full lap should be more than any realistic
         // audio block. Prevents pathological runaway on huge windows.
         let mut count = 0usize;
-        while t < next_tick && count <= STEPS as usize {
-            let step = ((t / s) % STEPS as u64) as u32;
+        while t < next_tick && count <= n as usize {
+            let step = ((t / s) % n) as u32;
             let mask = self.steps[step as usize];
             let vel = self.velocities[step as usize];
             self.reconcile_step(mask, vel);
@@ -490,6 +515,29 @@ mod tests {
     }
 
     #[test]
+    fn variable_step_count_wraps_at_runtime_length() {
+        // Set a step beyond the default 16-step bound; the internal
+        // vectors grow lazily and the modulo uses the new length.
+        let mut seq = Sequencer::new(48_000.0);
+        seq.set_step_mask(31, note_bit(60));
+        assert_eq!(seq.steps.len(), 32);
+        seq.set_playing(true);
+        let s = DEFAULT_TICKS_PER_STEP as u64;
+        // Cover the first 16 steps — no triggers (mask = 0 everywhere
+        // except step 31).
+        let _ = render_at_step(&mut seq, 0, 100);
+        let _ = render_at_step(&mut seq, 15, 100);
+        assert_eq!(seq.next_trigger_tick, 1);
+        // Step 31 fires.
+        seq.advance_for_window(30 * s, 31 * s + 1);
+        assert_eq!(seq.current_step(), 31);
+        assert_eq!(seq.next_trigger_tick, 2);
+        // Wrap — step 32 == step 0 again (no mask).
+        seq.advance_for_window(31 * s, 32 * s + 1);
+        assert_eq!(seq.current_step(), 0);
+    }
+
+    #[test]
     fn current_step_follows_engine_tick() {
         let s = DEFAULT_TICKS_PER_STEP as u64;
         let mut seq = Sequencer::new(48_000.0);
@@ -500,8 +548,8 @@ mod tests {
         // Next block covers [s, 2s): fires step 1.
         seq.advance_for_window(s, 2 * s);
         assert_eq!(seq.current_step(), 1);
-        // Skip forward — STEPS boundaries crossed; we wrap back to step 0.
-        seq.advance_for_window(2 * s, STEPS as u64 * s + 1);
+        // Skip forward — DEFAULT_STEPS boundaries crossed; we wrap back to step 0.
+        seq.advance_for_window(2 * s, DEFAULT_STEPS as u64 * s + 1);
         assert_eq!(seq.current_step(), 0);
         seq.set_playing(false);
         assert_eq!(seq.current_step(), -1);
