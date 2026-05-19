@@ -120,25 +120,132 @@
     return STEPS_PER_CLIP * STEP_TICKS;
   }
 
-  function noteAt(col: number, midi: number): PianoRollNote | null {
+  /// The note that occupies `(col, midi)` if any — i.e. a note on
+  /// this pitch row whose [startTick, startTick + lengthTicks) tick
+  /// range contains the column. Used both for rendering (paint every
+  /// column the note spans) and for click-to-remove (pick the right
+  /// note even when the user clicks a non-start column).
+  function noteCovering(col: number, midi: number): PianoRollNote | null {
     const tick = col * STEP_TICKS;
-    return notes.find((n) => n.pitch === midi && n.startTick === tick) ?? null;
+    for (const n of notes) {
+      if (n.pitch !== midi) continue;
+      if (n.startTick <= tick && tick < n.startTick + n.lengthTicks) return n;
+    }
+    return null;
   }
 
-  function toggleCell(col: number, midi: number) {
+  /// Phase-10 M2a — drag-create state. `dragStart` flips to non-null
+  /// on pointerdown over an empty cell; `dragEnd` tracks the last
+  /// pointer-moved column so the ghost preview spans [start, end].
+  /// pointerup commits a note with the resulting length (or toggles
+  /// when the pointer never moved off the start cell).
+  let dragStart = $state<{ col: number; midi: number } | null>(null);
+  let dragEnd = $state<{ col: number; midi: number } | null>(null);
+
+  function dragSpan(): { startCol: number; endCol: number } | null {
+    if (!dragStart || !dragEnd) return null;
+    if (dragStart.midi !== dragEnd.midi) return { startCol: dragStart.col, endCol: dragStart.col };
+    const lo = Math.min(dragStart.col, dragEnd.col);
+    const hi = Math.max(dragStart.col, dragEnd.col);
+    return { startCol: lo, endCol: hi };
+  }
+
+  /// True if a tentative drag-ghost covers `(col, midi)`. Drives the
+  /// translucent overlay so users see what they'll commit.
+  function inDragGhost(col: number, midi: number): boolean {
+    if (!dragStart) return false;
+    if (midi !== dragStart.midi) return false;
+    const span = dragSpan();
+    if (!span) return false;
+    return col >= span.startCol && col <= span.endCol;
+  }
+
+  function onCellPointerDown(e: PointerEvent, col: number, midi: number) {
+    if (e.button !== 0) return;
+    const existing = noteCovering(col, midi);
+    if (existing) {
+      // Click on an existing note — schedule a remove on pointerup
+      // (don't remove immediately so future drag-move work can
+      // distinguish click from drag). For M2a we treat any click on
+      // an existing note as a remove.
+      dragStart = { col, midi };
+      dragEnd = { col, midi };
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+    dragStart = { col, midi };
+    dragEnd = { col, midi };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onCellPointerEnter(col: number, midi: number) {
+    if (!dragStart) {
+      broadcastHover(col, midi);
+      return;
+    }
+    // Constrain the drag to the original pitch row — multi-row
+    // drags would imply pitch-shifting in the middle of a draw,
+    // which is more confusing than useful.
+    dragEnd = { col, midi: dragStart.midi };
+  }
+
+  function onCellPointerUp(e: PointerEvent) {
+    if (!dragStart || !dragEnd) {
+      dragStart = null;
+      dragEnd = null;
+      return;
+    }
+    const target = e.currentTarget as HTMLElement;
+    if (target.hasPointerCapture(e.pointerId)) {
+      target.releasePointerCapture(e.pointerId);
+    }
+    const span = dragSpan();
+    const start = dragStart;
+    const end = dragEnd;
+    dragStart = null;
+    dragEnd = null;
+    if (!span) return;
+    commitDrag(start, end, span);
+  }
+
+  function commitDrag(
+    start: { col: number; midi: number },
+    end: { col: number; midi: number },
+    span: { startCol: number; endCol: number },
+  ): void {
     const clip = getPianoRollClipForTrack(project, trackIdx);
     if (!clip) return;
-    const tick = col * STEP_TICKS;
-    if (noteAt(col, midi)) {
-      removePianoRollNoteAt(project, clip, midi, tick);
-    } else {
-      addPianoRollNote(project, clip, {
-        pitch: midi,
-        velocity: 100,
-        startTick: tick,
-        lengthTicks: STEP_TICKS,
-      });
+    // A drag that never left the start cell is a tap. If the cell
+    // is empty, add a 1-step note (legacy behaviour); if it's
+    // already occupied, remove the covering note.
+    if (start.col === end.col) {
+      const existing = noteCovering(start.col, start.midi);
+      if (existing) {
+        removePianoRollNoteAt(project, clip, start.midi, existing.startTick);
+      } else {
+        addPianoRollNote(project, clip, {
+          pitch: start.midi,
+          velocity: 100,
+          startTick: start.col * STEP_TICKS,
+          lengthTicks: STEP_TICKS,
+        });
+      }
+      return;
     }
+    // Multi-column drag: replace any covering note at the start
+    // column with a fresh note that spans [startCol, endCol].
+    const startTick = span.startCol * STEP_TICKS;
+    const lengthTicks = (span.endCol - span.startCol + 1) * STEP_TICKS;
+    const covering = noteCovering(span.startCol, start.midi);
+    if (covering) {
+      removePianoRollNoteAt(project, clip, start.midi, covering.startTick);
+    }
+    addPianoRollNote(project, clip, {
+      pitch: start.midi,
+      velocity: 100,
+      startTick,
+      lengthTicks,
+    });
   }
 
   $effect(() => {
@@ -206,17 +313,23 @@
       {#each rowDefs as row, r (row.midi)}
         {#each Array(cols) as _, c}
           {@const peerColor = peerCellColor(row.midi, c)}
+          {@const covering = noteCovering(c, row.midi)}
+          {@const isNoteStart = covering?.startTick === c * STEP_TICKS}
           <button
             class="cell"
             class:black-row={row.isAccent}
             class:beat={c % 4 === 0}
-            class:on={Boolean(noteAt(c, row.midi))}
+            class:on={Boolean(covering)}
+            class:note-start={isNoteStart}
+            class:ghost={inDragGhost(c, row.midi)}
             class:playhead={c === playheadCol}
             class:peer-hover={peerColor != null}
             style="grid-row: {r + 1}; grid-column: {c + 1};{peerColor ? ` --peer-color: ${peerColor};` : ''}"
             data-testid={`piano-cell-${row.midi}-${c}`}
-            onclick={() => toggleCell(c, row.midi)}
-            onmouseenter={() => broadcastHover(c, row.midi)}
+            onpointerdown={(e) => onCellPointerDown(e, c, row.midi)}
+            onpointerenter={() => onCellPointerEnter(c, row.midi)}
+            onpointerup={onCellPointerUp}
+            onpointercancel={() => { dragStart = null; dragEnd = null; }}
             aria-label={`${row.label} ${c + 1}`}
           ></button>
         {/each}
@@ -302,6 +415,18 @@
   .cell.on {
     background: #ff8c00;
   }
+  /* Phase-10 M2a — the first cell of a multi-step note gets a left
+     border so adjacent notes on the same row don't blur into one
+     undifferentiated bar. */
+  .cell.note-start {
+    border-left: 2px solid #cc6a00;
+  }
+  /* Drag-in-progress ghost — translucent overlay so users see what
+     they'll commit before they release. */
+  .cell.ghost {
+    background: rgba(255, 140, 0, 0.35);
+  }
+  .cell.ghost.on { background: rgba(255, 140, 0, 0.7); }
   .cell.playhead {
     box-shadow: inset 0 0 0 2px #ffd84a;
   }

@@ -32,16 +32,21 @@ clicking **★ Demo Song** and listening to the Bass track.
 The default for instrument tracks created via **+ Synth**. Each row
 is one MIDI pitch; each column is a 1/16 step.
 
-- **Click** a cell → add a note (length = 1 step, velocity 100).
-- **Click** again → remove it.
+- **Click** a cell → add a 1-step note at velocity 100. **Click**
+  it again → remove.
+- **Drag** across a row → create a longer note spanning the dragged
+  columns. The ghost overlay shows what you'll commit; release to
+  add it.
+- Clicking any column inside a multi-step note removes the whole
+  note (you don't have to hit the start cell).
 - The grid scales to match the clip's `lengthTicks`. A 4-bar clip
   shows **64 columns**.
 - The playhead column lights up as the engine plays through it.
 - Notes inside the playhead column show a **brighter accent**, so
   you can see exactly which note is firing right now.
 
-> _Velocity drag, length drag, multi-select and free-position notes
-> are tracked in Phase 10 M2 (P3 Piano Roll polish)._
+> _Drag-resize of existing notes, multi-select, and a right-pane
+> note inspector are tracked in the next slices of Phase 10 M2._
 
 ## Drum-row view
 
