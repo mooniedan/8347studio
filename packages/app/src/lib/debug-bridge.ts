@@ -30,9 +30,12 @@ import {
   addInsert,
   addSubtractiveTrack,
   addWasmInsert,
+  addAudioRegion,
   getAudioRegions,
   setAudioRegionFade,
+  setAudioRegionGain,
   updateAudioRegion,
+  type AudioRegionInput,
   type AudioRegionPatch,
   getLoopRegion,
   getMidiBinding,
@@ -285,6 +288,8 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
     importAssetIntoTrack: deps.importAssetIntoTrack,
     getAudioRegions: (trackIdx: number) =>
       withProject(deps, (p) => getAudioRegions(p, trackIdx), []),
+    addAudioRegion: (trackIdx: number, region: AudioRegionInput) =>
+      withProject(deps, (p) => { addAudioRegion(p, trackIdx, region); return true; }, false),
     setAudioRegionFade: (
       trackIdx: number,
       regionIdx: number,
@@ -294,6 +299,12 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
       withProject(
         deps,
         (p) => setAudioRegionFade(p, trackIdx, regionIdx, which, samples),
+        false,
+      ),
+    setAudioRegionGain: (trackIdx: number, regionIdx: number, gain: number) =>
+      withProject(
+        deps,
+        (p) => setAudioRegionGain(p, trackIdx, regionIdx, gain),
         false,
       ),
     updateAudioRegion: (

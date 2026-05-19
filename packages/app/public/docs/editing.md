@@ -122,5 +122,13 @@ bars match column-for-column.
   `lengthSamples` only; minimum length is one step.
 - All drags commit a single Y.Doc transaction on release, so collab
   peers see one consistent update per gesture.
-- An inspector edit panel (gain, fade times, sample range, reverse,
-  loop, follow-tempo) ships in the next M3 slice.
+- **Click** a region (no drag) → opens an inline inspector panel
+  beneath the timeline with editable controls:
+  - **Gain** slider (0..2, unity = 1.0).
+  - **Fade in / Fade out** in milliseconds (writes the sample-domain
+    fields via the asset's sample rate).
+  - Read-out of `startTick`, `lengthTicks`, and `assetOffsetSamples`.
+- Selected region carries a cyan outline that mirrors the inspector
+  panel's open state. The panel's **×** button closes both.
+- Reverse, loop, follow-tempo, original-BPM, sample-range sliders,
+  and warp-algo are slated for a later slice (need engine work).

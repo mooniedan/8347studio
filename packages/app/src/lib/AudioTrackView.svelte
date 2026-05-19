@@ -9,6 +9,8 @@
     type AudioRegionPatch,
     getAudioRegions,
     getAssetMetadata,
+    setAudioRegionFade,
+    setAudioRegionGain,
     updateAudioRegion,
   } from './project';
   import Waveform from './Waveform.svelte';
@@ -116,6 +118,23 @@
   }
   let regionDrag = $state<RegionDrag | null>(null);
 
+  /// Phase-10 M3d — region selection drives the edit panel below the
+  /// timeline. Selection is purely view-side; a no-movement pointer
+  /// gesture on the region body sets it, while clicking the empty
+  /// timeline (or any cell) below clears it. Clears automatically
+  /// when the track changes or the selected index falls off the end
+  /// of the regions array.
+  let selectedRegionIdx = $state<number | null>(null);
+  $effect(() => {
+    void trackIdx;
+    selectedRegionIdx = null;
+  });
+  $effect(() => {
+    if (selectedRegionIdx != null && selectedRegionIdx >= regions.length) {
+      selectedRegionIdx = null;
+    }
+  });
+
   function snapTicks(dxTicks: number): number {
     return Math.round(dxTicks / STEP_TICKS) * STEP_TICKS;
   }
@@ -190,7 +209,13 @@
   function commitRegionDrag(d: RegionDrag): void {
     const dStartTick = d.previewStartTick - d.origStartTick;
     const dLengthTicks = d.previewLengthTicks - d.origLengthTicks;
-    if (dStartTick === 0 && dLengthTicks === 0) return;
+    if (dStartTick === 0 && dLengthTicks === 0) {
+      // No-movement pointer-up on the region body acts as a tap-to-
+      // select; trim-l / trim-r without movement is just a tap on
+      // the grip and shouldn't change selection.
+      if (d.kind === 'move') selectedRegionIdx = d.regionIdx;
+      return;
+    }
     const patch: AudioRegionPatch = {
       startTick: d.previewStartTick,
       lengthTicks: d.previewLengthTicks,
@@ -274,9 +299,11 @@
             ? (r.fadeOutSamples / r.lengthSamples) * widthPx
             : 0}
           {@const dragging = regionDrag?.regionIdx === i}
+          {@const selected = selectedRegionIdx === i}
           <div
             class="region"
             class:dragging
+            class:selected
             data-testid={`audio-region-${trackIdx}-${i}`}
             style="left: {leftPx}px; width: {widthPx}px;"
             title={m?.sourceFilename ?? r.assetHash}
@@ -342,6 +369,98 @@
             </span>
           </div>
         {/each}
+      </div>
+    </div>
+  {/if}
+
+  {#if selectedRegionIdx != null && regions[selectedRegionIdx]}
+    {@const r = regions[selectedRegionIdx]}
+    {@const sr = meta(r.assetHash)?.sampleRate ?? 48_000}
+    {@const fadeInMs = (r.fadeInSamples / sr) * 1000}
+    {@const fadeOutMs = (r.fadeOutSamples / sr) * 1000}
+    <!--
+      Phase-10 M3d — region edit panel. Inline (not in the right
+      Inspector) so audio-only controls stay next to the timeline
+      that owns them; matches how the piano-roll's velocity lane
+      sits below its grid. Controls write to the Y.Doc directly via
+      the per-field helpers — collab + persistence pick them up
+      with no extra plumbing.
+    -->
+    <div
+      class="region-inspector"
+      data-testid={`audio-region-inspector-${trackIdx}`}
+    >
+      <header>
+        <span class="title">Region {selectedRegionIdx + 1}</span>
+        <button
+          type="button"
+          class="close"
+          data-testid={`audio-region-inspector-${trackIdx}-close`}
+          aria-label="Close region inspector"
+          onclick={() => { selectedRegionIdx = null; }}
+        >×</button>
+      </header>
+      <div class="rows">
+        <label class="row">
+          <span class="lbl">Gain</span>
+          <input
+            type="range"
+            min="0" max="2" step="0.01"
+            value={r.gain}
+            data-testid={`audio-region-inspector-${trackIdx}-gain`}
+            oninput={(e) => {
+              const v = Number((e.currentTarget as HTMLInputElement).value);
+              setAudioRegionGain(project, trackIdx, selectedRegionIdx!, v);
+            }}
+          />
+          <span class="val mono">{r.gain.toFixed(2)}</span>
+        </label>
+        <label class="row">
+          <span class="lbl">Fade in (ms)</span>
+          <input
+            type="number"
+            min="0" step="1"
+            value={Math.round(fadeInMs)}
+            data-testid={`audio-region-inspector-${trackIdx}-fade-in`}
+            oninput={(e) => {
+              const ms = Number((e.currentTarget as HTMLInputElement).value);
+              if (!Number.isFinite(ms)) return;
+              setAudioRegionFade(
+                project, trackIdx, selectedRegionIdx!,
+                'in', Math.round((ms / 1000) * sr),
+              );
+            }}
+          />
+        </label>
+        <label class="row">
+          <span class="lbl">Fade out (ms)</span>
+          <input
+            type="number"
+            min="0" step="1"
+            value={Math.round(fadeOutMs)}
+            data-testid={`audio-region-inspector-${trackIdx}-fade-out`}
+            oninput={(e) => {
+              const ms = Number((e.currentTarget as HTMLInputElement).value);
+              if (!Number.isFinite(ms)) return;
+              setAudioRegionFade(
+                project, trackIdx, selectedRegionIdx!,
+                'out', Math.round((ms / 1000) * sr),
+              );
+            }}
+          />
+        </label>
+        <div class="row readonly">
+          <span class="lbl">Start tick</span>
+          <span class="val mono">{r.startTick}</span>
+        </div>
+        <div class="row readonly">
+          <span class="lbl">Length (ticks)</span>
+          <span class="val mono">{r.lengthTicks}</span>
+        </div>
+        <div class="row readonly">
+          <span class="lbl">Asset offset</span>
+          <span class="val mono">{r.assetOffsetSamples} sm</span>
+        </div>
       </div>
     </div>
   {/if}
@@ -443,6 +562,10 @@
     cursor: grabbing;
     outline: 1px solid #ffd84a;
   }
+  .region.selected {
+    outline: 2px solid #7ad7ff;
+    z-index: 1;
+  }
   /* Phase-10 M3c — trim grips. The handle sits on top of the
      waveform but stays narrow enough that the body still receives
      pointerdown for `move`. `touch-action: none` lets the drag
@@ -519,5 +642,78 @@
     font-size: 9px;
     pointer-events: none;
     text-shadow: 0 1px 0 rgba(0,0,0,0.8);
+  }
+  /* Phase-10 M3d — inline region inspector. */
+  .region-inspector {
+    margin-top: 8px;
+    background: #15171a;
+    border: 1px solid #2a2a2a;
+    padding: 8px 10px;
+    color: #ccc;
+  }
+  .region-inspector header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .region-inspector .title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #aaa;
+  }
+  .region-inspector .close {
+    appearance: none;
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    color: #888;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    padding: 0;
+    font-size: 13px;
+  }
+  .region-inspector .close:hover { color: #fff; border-color: #555; }
+  .rows {
+    display: grid;
+    grid-template-columns: max-content 1fr max-content;
+    column-gap: 10px;
+    row-gap: 4px;
+    align-items: center;
+  }
+  .row {
+    display: contents;
+  }
+  .row .lbl {
+    font-size: 10px;
+    color: #888;
+  }
+  .row input[type="range"] {
+    width: 100%;
+  }
+  .row input[type="number"] {
+    width: 80px;
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 2px 4px;
+    font: 11px ui-monospace, monospace;
+  }
+  .row .val {
+    font-size: 10px;
+    color: #aaa;
+    text-align: right;
+  }
+  .mono {
+    font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .row.readonly .val {
+    grid-column: 2 / -1;
+    text-align: left;
+    color: #888;
   }
 </style>

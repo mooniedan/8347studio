@@ -761,6 +761,24 @@ export function updateAudioRegion(
 /// edit panel (Phase-10 M3d) and exposed via the debug bridge so
 /// tests + demo-song seeders can set fades without spinning up the
 /// UI.
+/// Per-region gain writer. Clamps to [0, 4] — the engine accepts
+/// > 1 (boost) and we don't want UI sliders to allow extreme values
+/// that surprise the user with silence-then-clipping.
+export function setAudioRegionGain(
+  p: Project,
+  trackIdx: number,
+  regionIdx: number,
+  gain: number,
+): boolean {
+  const arr = trackAudioRegionsArr(p, trackIdx);
+  if (!arr || regionIdx < 0 || regionIdx >= arr.length) return false;
+  const r = arr.get(regionIdx);
+  if (!r) return false;
+  const clamped = Math.max(0, Math.min(4, Number(gain) || 0));
+  p.doc.transact(() => r.set('gain', clamped));
+  return true;
+}
+
 export function setAudioRegionFade(
   p: Project,
   trackIdx: number,
