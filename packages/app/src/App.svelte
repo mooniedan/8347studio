@@ -14,8 +14,7 @@
   import MixerDrawer from './lib/MixerDrawer.svelte';
   import MasterMeter from './lib/MasterMeter.svelte';
   import PluginPicker, { type InstalledPlugin } from './lib/PluginPicker.svelte';
-  import { parseManifestJson, type PluginManifest } from './lib/plugin-manifest';
-  import { sha256 as wasmSha256 } from './lib/plugin-loader';
+  import * as pluginInstall from './lib/plugin-install';
   // Phase-8 M5: the picker installs via the worklet (canonical owner
   // of the plugin WebAssembly.Instance), NOT via the M3a JS-side
   // loadPlugin helper — that was a one-shot for the loader spec.
@@ -39,7 +38,6 @@
     addWasmInsert,
     addWasmInsertByManifest,
     recordInstalledPlugin,
-    listInstalledPlugins,
     setInsertParam,
     addAudioRegion,
     getAudioRegions,
@@ -140,49 +138,21 @@
   let pickerOpen = $state(false);
   let installedPlugins = $state<InstalledPlugin[]>([]);
 
-  /// Persist + register a plugin under a manifest URL. Writes the
-  /// manifest to Y.Doc `meta.installedPlugins` so a reload can
-  /// re-fetch and re-register — boot's `reloadInstalledPlugins`
-  /// runs the same fetch+verify+register dance.
+  /// Install pipeline + Y.Doc-driven reload live in
+  /// `lib/plugin-install.ts`. App.svelte just owns the reactive
+  /// `installedPlugins` $state + the picker UI, and forwards into
+  /// the module with the worklet `loadWasm` dep injected.
   async function installPluginFromUrl(url: string): Promise<string | undefined> {
     if (!project) return 'no project loaded';
-    try {
-      const manifestResp = await fetch(url);
-      if (!manifestResp.ok) return `fetch failed: ${manifestResp.status}`;
-      const text = await manifestResp.text();
-      const parsed = parseManifestJson(text);
-      if (!parsed.ok) {
-        const head = parsed.issues[0];
-        return `invalid manifest at ${head.path || '<root>'}: ${head.message}`;
-      }
-      const manifest = parsed.manifest;
-      if (installedPlugins.some((p) => p.manifest.id === manifest.id)) {
-        return `already installed: ${manifest.id}`;
-      }
-      const wasmAbs = new URL(manifest.wasm, new URL(url, window.location.href)).toString();
-      const wasmResp = await fetch(wasmAbs);
-      if (!wasmResp.ok) return `wasm fetch failed: ${wasmResp.status}`;
-      const wasmBytes = new Uint8Array(await wasmResp.arrayBuffer());
-      const got = `sha256-${await wasmSha256(wasmBytes)}`;
-      if (got !== manifest.wasmIntegrity) {
-        return `integrity mismatch: manifest says ${manifest.wasmIntegrity}, wasm hashed to ${got}`;
-      }
-      const handle = await audio.postLoadWasmPlugin(wasmBytes, {
-        maxBlockSize: 256,
-        inChannels: manifest.kind === 'instrument' ? 0 : 1,
-        outChannels: 1,
-      });
-      installedPlugins = [...installedPlugins, { manifest, handle }];
-      // Persist a manifest variant that points at the absolute wasm
-      // URL we just verified — so reload doesn't have to re-resolve
-      // the relative path against the original manifest URL (which
-      // may not be retained).
-      const persisted = { ...manifest, wasm: wasmAbs };
-      recordInstalledPlugin(project, manifest.id, JSON.stringify(persisted));
-      return undefined;
-    } catch (err) {
-      return `install error: ${(err as Error).message}`;
-    }
+    const result = await pluginInstall.installPluginFromUrl(
+      project,
+      url,
+      installedPlugins,
+      { loadWasm: audio.postLoadWasmPlugin },
+    );
+    if ('err' in result) return result.err;
+    installedPlugins = [...installedPlugins, result.ok];
+    return undefined;
   }
 
   function addInstalledPluginToSelectedTrack(plugin: InstalledPlugin): void {
@@ -193,57 +163,11 @@
     pickerOpen = false;
   }
 
-  /// Phase-8 M5b — on every fresh boot, walk meta.installedPlugins
-  /// and re-fetch + integrity-verify + re-register each manifest so
-  /// the picker shows them and any track inserts that reference
-  /// them by id can be addressed by the engine. Failures leave the
-  /// entry with handle=0 + loadError set; the slot encoder drops
-  /// failed inserts (silent audio passthrough), and the picker card
-  /// shows a red badge so the user sees what happened.
   async function reloadInstalledPlugins(): Promise<void> {
     if (!project) return;
-    const stored = listInstalledPlugins(project);
-    if (stored.length === 0) {
-      installedPlugins = [];
-      return;
-    }
-    const next: InstalledPlugin[] = [];
-    for (const { manifestJson } of stored) {
-      let manifest: PluginManifest;
-      try {
-        const parsed = parseManifestJson(manifestJson);
-        if (!parsed.ok) throw new Error(parsed.issues[0]?.message ?? 'invalid manifest');
-        manifest = parsed.manifest;
-      } catch (err) {
-        // Persisted JSON has rotted somehow; surface but don't
-        // crash — the entry stays so the user can see it.
-        next.push({
-          manifest: { id: 'unknown', name: 'Unknown', version: '0.0.0', kind: 'effect',
-            wasm: '', wasmIntegrity: '', params: [] },
-          handle: 0,
-          loadError: `bad manifest JSON: ${(err as Error).message}`,
-        });
-        continue;
-      }
-      try {
-        const wasmResp = await fetch(manifest.wasm);
-        if (!wasmResp.ok) throw new Error(`fetch ${manifest.wasm}: ${wasmResp.status}`);
-        const wasmBytes = new Uint8Array(await wasmResp.arrayBuffer());
-        const got = `sha256-${await wasmSha256(wasmBytes)}`;
-        if (got !== manifest.wasmIntegrity) {
-          throw new Error(`integrity drift: expected ${manifest.wasmIntegrity}, got ${got}`);
-        }
-        const handle = await audio.postLoadWasmPlugin(wasmBytes, {
-          maxBlockSize: 256,
-          inChannels: manifest.kind === 'instrument' ? 0 : 1,
-          outChannels: 1,
-        });
-        next.push({ manifest, handle });
-      } catch (err) {
-        next.push({ manifest, handle: 0, loadError: (err as Error).message });
-      }
-    }
-    installedPlugins = next;
+    installedPlugins = await pluginInstall.reloadInstalledPlugins(project, {
+      loadWasm: audio.postLoadWasmPlugin,
+    });
     bridge?.rebuild();
   }
 
