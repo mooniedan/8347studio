@@ -115,6 +115,22 @@ test.describe('demo song', () => {
     // Lead has piano-roll notes seeded for the chord progression.
     expect(await pianoRollNoteCount(page, 0)).toBeGreaterThanOrEqual(8);
 
+    // Phase-10 M2c — the lead chord progression seeds varied per-
+    // note velocities so the new piano-roll velocity lane is
+    // audibly exercised by the cumulative regression. We assert at
+    // least three distinct levels appear across the 12 chord notes
+    // (one per bar at a minimum) without pinning exact numbers so
+    // future seed tuning stays free.
+    const leadVelocities = await page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: { getPianoRollNotes: (i: number) => { velocity: number }[] };
+      };
+      return w.__bridge.getPianoRollNotes(0).map((n) => n.velocity);
+    });
+    expect(leadVelocities.length).toBeGreaterThanOrEqual(8);
+    const distinctLead = new Set(leadVelocities);
+    expect(distinctLead.size).toBeGreaterThanOrEqual(3);
+
     // Phase-10 M1 — the demo's bass step-seq carries varied
     // per-step velocities so the new velocity-lane feature is
     // audibly exercised by the cumulative regression. We don't pin

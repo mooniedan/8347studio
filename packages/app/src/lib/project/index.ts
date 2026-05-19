@@ -325,6 +325,34 @@ export function addPianoRollNote(
   });
 }
 
+/// Per-note velocity writer. Mutates the velocity field in place so
+/// the note keeps its array index — this matters for the M2c
+/// velocity lane (live drag) where stable bar positions across
+/// updates avoid flicker.
+export function setPianoRollNoteVelocity(
+  p: Project,
+  clip: Y.Map<unknown>,
+  pitch: number,
+  startTick: number,
+  velocity: number,
+): boolean {
+  const arr = clip.get('notes') as Y.Array<Y.Map<unknown>>;
+  let found: Y.Map<unknown> | null = null;
+  arr.forEach((n) => {
+    if (
+      found == null &&
+      ((n.get('pitch') as number) & 0xff) === pitch &&
+      (n.get('startTick') as number) === startTick
+    ) {
+      found = n;
+    }
+  });
+  if (!found) return false;
+  const clamped = Math.max(0, Math.min(127, Math.round(velocity))) & 0xff;
+  p.doc.transact(() => found!.set('velocity', clamped));
+  return true;
+}
+
 export function removePianoRollNoteAt(
   p: Project,
   clip: Y.Map<unknown>,

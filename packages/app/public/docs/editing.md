@@ -51,9 +51,18 @@ is one MIDI pitch; each column is a 1/16 step.
 - Notes inside the playhead column show a **brighter accent**, so
   you can see exactly which note is firing right now.
 
-> _Per-note velocity lane, selection rectangle + multi-select, and a
-> right-pane note inspector are tracked in the next slices of Phase
-> 10 M2._
+### Velocity lane
+
+Below the piano-roll grid sits a **per-note velocity lane** — one
+vertical bar per note at its `startTick` column. Bar height encodes
+velocity in the range **30..127** (default 100). Drag a bar up or
+down to set that note's velocity live; the change persists into the
+project and the engine plays the next pass at the new level. Multi-
+step notes show their bar at the start column only — the rest of
+the span follows automatically.
+
+> _Selection rectangle + multi-select and a right-pane note
+> inspector are tracked in the next slices of Phase 10 M2._
 
 ## Drum-row view
 

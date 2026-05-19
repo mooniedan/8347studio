@@ -12,6 +12,7 @@
     readPianoRollNotes,
     addPianoRollNote,
     removePianoRollNoteAt,
+    setPianoRollNoteVelocity,
   } from './project';
 
   import type { CollabState } from './collab.svelte';
@@ -229,7 +230,7 @@
     if (e.button !== 0) return;
     const existing = noteCovering(col, midi);
     const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
+    try { target.setPointerCapture(e.pointerId); } catch { /* synthetic event */ }
 
     if (existing) {
       const startCol = existing.startTick / STEP_TICKS;
@@ -375,6 +376,65 @@
     }
   }
 
+  /// Phase-10 M2c — velocity-lane drag. While a bar is being dragged,
+  /// `velDrag` carries the identity of the note plus the lane element
+  /// so we can recompute the y-ratio against the same rect on every
+  /// pointermove without re-querying the DOM.
+  const VELOCITY_MIN = 30;
+  const VELOCITY_MAX = 127;
+  let velDrag = $state<
+    | { pitch: number; startTick: number; lane: HTMLElement; pointerId: number }
+    | null
+  >(null);
+
+  function yToVelocity(clientY: number, lane: HTMLElement): number {
+    const rect = lane.getBoundingClientRect();
+    const ratio = 1 - (clientY - rect.top) / Math.max(1, rect.height);
+    const clamped = Math.max(0, Math.min(1, ratio));
+    return Math.round(VELOCITY_MIN + clamped * (VELOCITY_MAX - VELOCITY_MIN));
+  }
+
+  function onVelBarPointerDown(
+    e: PointerEvent,
+    pitch: number,
+    startTick: number,
+  ) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const lane = (e.currentTarget as HTMLElement).closest('.vel-lane') as HTMLElement | null;
+    if (!lane) return;
+    // Pointer capture keeps move/up events routed to the lane even
+    // when the cursor leaves it. Synthetic PointerEvents in tests
+    // don't register as active pointers, so the capture call can
+    // throw — drag state is set unconditionally so the no-capture
+    // path still works (pointermove/up are also bound on the lane).
+    try { lane.setPointerCapture(e.pointerId); } catch { /* ok */ }
+    velDrag = { pitch, startTick, lane, pointerId: e.pointerId };
+    // Immediate update so a tap (no drag) also sets the velocity.
+    applyVelDrag(e.clientY);
+  }
+
+  function onVelLanePointerMove(e: PointerEvent) {
+    if (!velDrag || e.pointerId !== velDrag.pointerId) return;
+    applyVelDrag(e.clientY);
+  }
+
+  function onVelLanePointerUp(e: PointerEvent) {
+    if (!velDrag || e.pointerId !== velDrag.pointerId) return;
+    if (velDrag.lane.hasPointerCapture(e.pointerId)) {
+      velDrag.lane.releasePointerCapture(e.pointerId);
+    }
+    velDrag = null;
+  }
+
+  function applyVelDrag(clientY: number) {
+    if (!velDrag) return;
+    const clip = getPianoRollClipForTrack(project, trackIdx);
+    if (!clip) return;
+    const v = yToVelocity(clientY, velDrag.lane);
+    setPianoRollNoteVelocity(project, clip, velDrag.pitch, velDrag.startTick, v);
+  }
+
   $effect(() => {
     const idx = trackIdx;
     const clip = getPianoRollClipForTrack(project, idx);
@@ -466,6 +526,39 @@
         {/each}
       {/each}
     </div>
+
+    <!--
+      Phase-10 M2c — per-note velocity lane. One vertical bar per note
+      at its `startTick` column; bar height encodes velocity in
+      [VELOCITY_MIN, VELOCITY_MAX]. Drag a bar's top up/down to set
+      that note's velocity. Multi-note overlap on the same column
+      stacks visually but each bar stays independently grabbable.
+    -->
+    <div class="vel-label" aria-hidden="true">Vel</div>
+    <div
+      class="vel-lane"
+      data-testid={`piano-velocity-lane-${trackIdx}`}
+      style="grid-template-columns: repeat({cols}, var(--col-w));"
+      onpointermove={onVelLanePointerMove}
+      onpointerup={onVelLanePointerUp}
+      onpointercancel={onVelLanePointerUp}
+      role="presentation"
+    >
+      {#each notes as n (`${n.pitch}:${n.startTick}`)}
+        {@const col = n.startTick / STEP_TICKS}
+        {@const heightPct = ((n.velocity - VELOCITY_MIN) / (VELOCITY_MAX - VELOCITY_MIN)) * 100}
+        <button
+          class="vel-bar"
+          class:playhead={col === playheadCol}
+          style="grid-column: {col + 1}; height: {Math.max(4, heightPct)}%;"
+          data-testid={`piano-vel-bar-${n.pitch}-${n.startTick}`}
+          data-velocity={n.velocity}
+          onpointerdown={(e) => onVelBarPointerDown(e, n.pitch, n.startTick)}
+          title={`${n.velocity}`}
+          aria-label={`Velocity for note ${n.pitch} at tick ${n.startTick}: ${n.velocity}`}
+        ></button>
+      {/each}
+    </div>
   </div>
 </div>
 
@@ -475,11 +568,20 @@
     color: #ddd;
   }
   .roll {
+    /* Shared column / row sizing — the note grid and the velocity
+       lane both reference these so their columns line up vertically. */
+    --row-h: 22px;
+    --col-w: 36px;
     display: grid;
     grid-template-columns: 32px auto;
+    grid-template-rows: auto auto;
     gap: 4px;
     overflow-x: auto;
     max-width: 100%;
+  }
+  .drum-roll .roll {
+    --row-h: 32px;
+    --col-w: 28px;
   }
   /* Drum view needs more room for "Closed Hat" / "Open Hat" labels
      and benefits from taller rows since there's only 5 of them. */
@@ -514,19 +616,12 @@
     color: #aaa;
   }
   .grid {
-    /* Phase-8 follow-up — cells are sized explicitly so the grid
-       scales horizontally with the clip length without crushing
-       vertically. Outer `.roll` scrolls if content exceeds the
-       canvas width. */
-    --row-h: 22px;
-    --col-w: 36px;
+    /* Cells size from the shared `--row-h` / `--col-w` declared on
+       `.roll`; the outer container scrolls horizontally if the
+       column count exceeds the canvas. */
     display: grid;
     background: #222;
     border: 1px solid #333;
-  }
-  .drum-roll .grid {
-    --row-h: 32px;
-    --col-w: 28px;
   }
   .cell {
     appearance: none;
@@ -568,5 +663,47 @@
      peer is hovering this cell. */
   .cell.peer-hover {
     box-shadow: inset 0 0 0 2px var(--peer-color, var(--accent-hi));
+  }
+  /* Phase-10 M2c — velocity lane.
+     Each `.vel-bar` sits at the bottom of its grid column, growing
+     upward as velocity increases. The lane container is a CSS grid
+     mirroring the note grid's column layout so bars line up
+     vertically with their notes. */
+  .vel-label {
+    color: #888;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    padding: 0 4px 2px 0;
+  }
+  .vel-lane {
+    height: 56px;
+    display: grid;
+    align-items: end;
+    background: #1a1c21;
+    border: 1px solid #333;
+    position: relative;
+  }
+  .vel-bar {
+    appearance: none;
+    border: none;
+    background: #ff8c00;
+    /* Reduce the visible width so adjacent-column bars don't touch. */
+    width: calc(var(--col-w) - 6px);
+    justify-self: center;
+    cursor: ns-resize;
+    padding: 0;
+    border-radius: 2px 2px 0 0;
+    align-self: end;
+    touch-action: none;
+  }
+  .vel-bar:hover {
+    background: #ffa733;
+  }
+  .vel-bar.playhead {
+    background: #ffd84a;
   }
 </style>

@@ -148,22 +148,32 @@ export function seedDemoSong(p: Project): void {
     const leadClip = getPianoRollClipForTrack(p, leadIdx);
     if (leadClip) {
       (leadClip as Y.Map<unknown>).set('lengthTicks', PROG_STEPS * STEP_TICKS);
+      // Phase-10 M2c — per-bar velocity swell so the new piano-roll
+      // velocity lane shows visible variation when ★ Demo Song is
+      // loaded. Bar 1 punches in strong; bars 2–3 settle; bar 4
+      // pulls back as the turnaround. Within each chord the bass
+      // note (lowest semi) is slightly hotter than the upper voices
+      // for a touch of voicing balance.
+      const V1L = 118, V1U = 108;
+      const V2L = 102, V2U = 92;
+      const V3L = 95,  V3U = 85;
+      const V4L = 80,  V4U = 70;
       // Bar 1: Cm (C, Eb, G).
-      addPianoRollNote(p, leadClip, lead(0, 0, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(3, 0, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(7, 0, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(0, 0, CHORD_LEN, V1L));
+      addPianoRollNote(p, leadClip, lead(3, 0, CHORD_LEN, V1U));
+      addPianoRollNote(p, leadClip, lead(7, 0, CHORD_LEN, V1U));
       // Bar 2: Bb (Bb, D, F).
-      addPianoRollNote(p, leadClip, lead(-2, 16, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(2, 16, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(5, 16, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(-2, 16, CHORD_LEN, V2L));
+      addPianoRollNote(p, leadClip, lead(2, 16, CHORD_LEN, V2U));
+      addPianoRollNote(p, leadClip, lead(5, 16, CHORD_LEN, V2U));
       // Bar 3: Ab (Ab, C, Eb).
-      addPianoRollNote(p, leadClip, lead(-4, 32, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(0, 32, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(3, 32, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(-4, 32, CHORD_LEN, V3L));
+      addPianoRollNote(p, leadClip, lead(0, 32, CHORD_LEN, V3U));
+      addPianoRollNote(p, leadClip, lead(3, 32, CHORD_LEN, V3U));
       // Bar 4: G (G, B, D) — turnaround.
-      addPianoRollNote(p, leadClip, lead(-5, 48, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(-1, 48, CHORD_LEN));
-      addPianoRollNote(p, leadClip, lead(2, 48, CHORD_LEN));
+      addPianoRollNote(p, leadClip, lead(-5, 48, CHORD_LEN, V4L));
+      addPianoRollNote(p, leadClip, lead(-1, 48, CHORD_LEN, V4U));
+      addPianoRollNote(p, leadClip, lead(2, 48, CHORD_LEN, V4U));
     }
     // Synth voicing — punchier than defaults.
     setSynthParam(p, leadIdx, SUB_FILTER_CUTOFF, 1200);
