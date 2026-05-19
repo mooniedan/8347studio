@@ -37,16 +37,23 @@ is one MIDI pitch; each column is a 1/16 step.
 - **Drag** across a row → create a longer note spanning the dragged
   columns. The ghost overlay shows what you'll commit; release to
   add it.
-- Clicking any column inside a multi-step note removes the whole
-  note (you don't have to hit the start cell).
+- **Drag the body** of an existing note → move it. The ghost
+  follows your cursor across both columns and pitch rows; length and
+  velocity are preserved on release.
+- **Drag the right edge** of a note (last ~25% of its rightmost
+  cell, where the cursor sits over the grip) → resize. The start
+  tick stays fixed; release sets the new length.
+- Clicking any column inside a multi-step note (without dragging)
+  removes the whole note.
 - The grid scales to match the clip's `lengthTicks`. A 4-bar clip
   shows **64 columns**.
 - The playhead column lights up as the engine plays through it.
 - Notes inside the playhead column show a **brighter accent**, so
   you can see exactly which note is firing right now.
 
-> _Drag-resize of existing notes, multi-select, and a right-pane
-> note inspector are tracked in the next slices of Phase 10 M2._
+> _Per-note velocity lane, selection rectangle + multi-select, and a
+> right-pane note inspector are tracked in the next slices of Phase
+> 10 M2._
 
 ## Drum-row view
 

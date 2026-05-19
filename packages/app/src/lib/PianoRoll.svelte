@@ -134,118 +134,245 @@
     return null;
   }
 
-  /// Phase-10 M2a — drag-create state. `dragStart` flips to non-null
-  /// on pointerdown over an empty cell; `dragEnd` tracks the last
-  /// pointer-moved column so the ghost preview spans [start, end].
-  /// pointerup commits a note with the resulting length (or toggles
-  /// when the pointer never moved off the start cell).
-  let dragStart = $state<{ col: number; midi: number } | null>(null);
-  let dragEnd = $state<{ col: number; midi: number } | null>(null);
+  /// Phase-10 M2 drag state. Three kinds:
+  ///   - `create` — pointer-down on an empty cell. Span = [start, curr]
+  ///     on the start pitch row. Commits a new note.
+  ///   - `move` — pointer-down on the interior of an existing note.
+  ///     Tracks delta in cols + midi rows; ghost shows the note at
+  ///     the dragged position. Commit removes the original and adds
+  ///     a fresh note at (newPitch, newStartTick) with the same
+  ///     lengthTicks and velocity.
+  ///   - `resize` — pointer-down near the right edge of an existing
+  ///     note's last cell. Anchor stays at the note's startTick; the
+  ///     end follows the pointer. Commit updates lengthTicks.
+  type DragKind = 'create' | 'move' | 'resize';
+  interface Drag {
+    kind: DragKind;
+    startCol: number;
+    startMidi: number;
+    currCol: number;
+    currMidi: number;
+    /// For move + resize: the note being manipulated.
+    orig?: PianoRollNote;
+  }
+  let drag = $state<Drag | null>(null);
 
-  function dragSpan(): { startCol: number; endCol: number } | null {
-    if (!dragStart || !dragEnd) return null;
-    if (dragStart.midi !== dragEnd.midi) return { startCol: dragStart.col, endCol: dragStart.col };
-    const lo = Math.min(dragStart.col, dragEnd.col);
-    const hi = Math.max(dragStart.col, dragEnd.col);
-    return { startCol: lo, endCol: hi };
+  /// Computed ghost span — what cells the in-flight drag would paint.
+  /// Returns `null` when there's no drag or when the kind has no
+  /// visible ghost (shouldn't happen given the three kinds above).
+  function ghostFor(col: number, midi: number): boolean {
+    if (!drag) return false;
+    if (drag.kind === 'create') {
+      if (midi !== drag.startMidi) return false;
+      const lo = Math.min(drag.startCol, drag.currCol);
+      const hi = Math.max(drag.startCol, drag.currCol);
+      return col >= lo && col <= hi;
+    }
+    if (drag.kind === 'resize' && drag.orig) {
+      if (midi !== drag.orig.pitch) return false;
+      const startCol = drag.orig.startTick / STEP_TICKS;
+      const endCol = Math.max(startCol, drag.currCol);
+      return col >= startCol && col <= endCol;
+    }
+    if (drag.kind === 'move' && drag.orig) {
+      const startCol = drag.orig.startTick / STEP_TICKS;
+      const spanCols = drag.orig.lengthTicks / STEP_TICKS;
+      const dCol = drag.currCol - drag.startCol;
+      const dMidi = drag.currMidi - drag.startMidi;
+      const newStart = startCol + dCol;
+      const newPitch = drag.orig.pitch + dMidi;
+      if (midi !== newPitch) return false;
+      return col >= newStart && col < newStart + spanCols;
+    }
+    return false;
   }
 
-  /// True if a tentative drag-ghost covers `(col, midi)`. Drives the
-  /// translucent overlay so users see what they'll commit.
-  function inDragGhost(col: number, midi: number): boolean {
-    if (!dragStart) return false;
-    if (midi !== dragStart.midi) return false;
-    const span = dragSpan();
-    if (!span) return false;
-    return col >= span.startCol && col <= span.endCol;
+  /// True when `(col, midi)` is the leftmost cell of the ghost span —
+  /// drives the `note-start` accent so the in-flight drag previews
+  /// the same "first cell brighter" look the committed note has.
+  function isGhostStart(col: number, midi: number): boolean {
+    if (!drag) return false;
+    if (drag.kind === 'create') {
+      if (midi !== drag.startMidi) return false;
+      return col === Math.min(drag.startCol, drag.currCol);
+    }
+    if (drag.kind === 'resize' && drag.orig) {
+      const startCol = drag.orig.startTick / STEP_TICKS;
+      return midi === drag.orig.pitch && col === startCol;
+    }
+    if (drag.kind === 'move' && drag.orig) {
+      const startCol = drag.orig.startTick / STEP_TICKS;
+      const dCol = drag.currCol - drag.startCol;
+      const dMidi = drag.currMidi - drag.startMidi;
+      return midi === drag.orig.pitch + dMidi && col === startCol + dCol;
+    }
+    return false;
   }
+
+  /// True when `(col, midi)` belongs to the original note that's
+  /// currently being moved or resized — we hide the underlying
+  /// `.on` paint so only the ghost is visible during the drag.
+  function isMovingOriginalCell(col: number, midi: number): boolean {
+    if (!drag || !drag.orig) return false;
+    if (drag.kind === 'resize') return false; // resize keeps the start in place
+    if (midi !== drag.orig.pitch) return false;
+    const startCol = drag.orig.startTick / STEP_TICKS;
+    const endCol = startCol + drag.orig.lengthTicks / STEP_TICKS - 1;
+    return col >= startCol && col <= endCol;
+  }
+
+  /// Cell-x ratio within the last 25% of the cell counts as a resize
+  /// grip — applies only on the last column of a covering note.
+  const RESIZE_GRIP_RATIO = 0.75;
 
   function onCellPointerDown(e: PointerEvent, col: number, midi: number) {
     if (e.button !== 0) return;
     const existing = noteCovering(col, midi);
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+
     if (existing) {
-      // Click on an existing note — schedule a remove on pointerup
-      // (don't remove immediately so future drag-move work can
-      // distinguish click from drag). For M2a we treat any click on
-      // an existing note as a remove.
-      dragStart = { col, midi };
-      dragEnd = { col, midi };
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      const startCol = existing.startTick / STEP_TICKS;
+      const spanCols = existing.lengthTicks / STEP_TICKS;
+      const isLastCol = col === startCol + spanCols - 1;
+      const rect = target.getBoundingClientRect();
+      const xRatio = (e.clientX - rect.left) / Math.max(1, rect.width);
+      if (isLastCol && xRatio >= RESIZE_GRIP_RATIO) {
+        drag = {
+          kind: 'resize',
+          startCol: col,
+          startMidi: midi,
+          currCol: col,
+          currMidi: midi,
+          orig: existing,
+        };
+        return;
+      }
+      drag = {
+        kind: 'move',
+        startCol: col,
+        startMidi: midi,
+        currCol: col,
+        currMidi: midi,
+        orig: existing,
+      };
       return;
     }
-    dragStart = { col, midi };
-    dragEnd = { col, midi };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    drag = {
+      kind: 'create',
+      startCol: col,
+      startMidi: midi,
+      currCol: col,
+      currMidi: midi,
+    };
   }
 
   function onCellPointerEnter(col: number, midi: number) {
-    if (!dragStart) {
+    if (!drag) {
       broadcastHover(col, midi);
       return;
     }
-    // Constrain the drag to the original pitch row — multi-row
-    // drags would imply pitch-shifting in the middle of a draw,
-    // which is more confusing than useful.
-    dragEnd = { col, midi: dragStart.midi };
+    if (drag.kind === 'create' || drag.kind === 'resize') {
+      // create / resize stay on the original pitch row.
+      drag = { ...drag, currCol: col, currMidi: drag.startMidi };
+    } else {
+      // move tracks both col and midi.
+      drag = { ...drag, currCol: col, currMidi: midi };
+    }
   }
 
   function onCellPointerUp(e: PointerEvent) {
-    if (!dragStart || !dragEnd) {
-      dragStart = null;
-      dragEnd = null;
-      return;
-    }
+    const d = drag;
+    drag = null;
     const target = e.currentTarget as HTMLElement;
     if (target.hasPointerCapture(e.pointerId)) {
       target.releasePointerCapture(e.pointerId);
     }
-    const span = dragSpan();
-    const start = dragStart;
-    const end = dragEnd;
-    dragStart = null;
-    dragEnd = null;
-    if (!span) return;
-    commitDrag(start, end, span);
+    if (!d) return;
+    commitDrag(d);
   }
 
-  function commitDrag(
-    start: { col: number; midi: number },
-    end: { col: number; midi: number },
-    span: { startCol: number; endCol: number },
-  ): void {
+  function commitDrag(d: Drag): void {
     const clip = getPianoRollClipForTrack(project, trackIdx);
     if (!clip) return;
-    // A drag that never left the start cell is a tap. If the cell
-    // is empty, add a 1-step note (legacy behaviour); if it's
-    // already occupied, remove the covering note.
-    if (start.col === end.col) {
-      const existing = noteCovering(start.col, start.midi);
-      if (existing) {
-        removePianoRollNoteAt(project, clip, start.midi, existing.startTick);
-      } else {
-        addPianoRollNote(project, clip, {
-          pitch: start.midi,
-          velocity: 100,
-          startTick: start.col * STEP_TICKS,
-          lengthTicks: STEP_TICKS,
-        });
-      }
+
+    // Pointer-down on an existing note that never moved is a tap-to-
+    // remove (preserves legacy click-anywhere-on-note → delete from
+    // M2a). Move and resize both reach this branch when dCol/dMidi
+    // collapse to zero.
+    if (
+      (d.kind === 'move' || d.kind === 'resize') &&
+      d.orig &&
+      d.startCol === d.currCol &&
+      d.startMidi === d.currMidi
+    ) {
+      removePianoRollNoteAt(project, clip, d.orig.pitch, d.orig.startTick);
       return;
     }
-    // Multi-column drag: replace any covering note at the start
-    // column with a fresh note that spans [startCol, endCol].
-    const startTick = span.startCol * STEP_TICKS;
-    const lengthTicks = (span.endCol - span.startCol + 1) * STEP_TICKS;
-    const covering = noteCovering(span.startCol, start.midi);
-    if (covering) {
-      removePianoRollNoteAt(project, clip, start.midi, covering.startTick);
+
+    if (d.kind === 'create') {
+      // Tap: add or remove at the cell.
+      if (d.startCol === d.currCol) {
+        const existing = noteCovering(d.startCol, d.startMidi);
+        if (existing) {
+          removePianoRollNoteAt(project, clip, d.startMidi, existing.startTick);
+        } else {
+          addPianoRollNote(project, clip, {
+            pitch: d.startMidi,
+            velocity: 100,
+            startTick: d.startCol * STEP_TICKS,
+            lengthTicks: STEP_TICKS,
+          });
+        }
+        return;
+      }
+      // Multi-col drag: leftmost wins.
+      const lo = Math.min(d.startCol, d.currCol);
+      const hi = Math.max(d.startCol, d.currCol);
+      const covering = noteCovering(lo, d.startMidi);
+      if (covering) {
+        removePianoRollNoteAt(project, clip, d.startMidi, covering.startTick);
+      }
+      addPianoRollNote(project, clip, {
+        pitch: d.startMidi,
+        velocity: 100,
+        startTick: lo * STEP_TICKS,
+        lengthTicks: (hi - lo + 1) * STEP_TICKS,
+      });
+      return;
     }
-    addPianoRollNote(project, clip, {
-      pitch: start.midi,
-      velocity: 100,
-      startTick,
-      lengthTicks,
-    });
+
+    if (d.kind === 'resize' && d.orig) {
+      const startCol = d.orig.startTick / STEP_TICKS;
+      // Pointer at or before the start cell collapses the note to
+      // 1 step rather than allowing a negative-length write.
+      const newEndCol = Math.max(startCol, d.currCol);
+      const newLengthTicks = (newEndCol - startCol + 1) * STEP_TICKS;
+      if (newLengthTicks === d.orig.lengthTicks) return; // no-op
+      removePianoRollNoteAt(project, clip, d.orig.pitch, d.orig.startTick);
+      addPianoRollNote(project, clip, {
+        pitch: d.orig.pitch,
+        velocity: d.orig.velocity,
+        startTick: d.orig.startTick,
+        lengthTicks: newLengthTicks,
+      });
+      return;
+    }
+
+    if (d.kind === 'move' && d.orig) {
+      const dCol = d.currCol - d.startCol;
+      const dMidi = d.currMidi - d.startMidi;
+      if (dCol === 0 && dMidi === 0) return;
+      const newStartTick = Math.max(0, d.orig.startTick + dCol * STEP_TICKS);
+      const newPitch = Math.max(0, Math.min(127, d.orig.pitch + dMidi));
+      removePianoRollNoteAt(project, clip, d.orig.pitch, d.orig.startTick);
+      addPianoRollNote(project, clip, {
+        pitch: newPitch,
+        velocity: d.orig.velocity,
+        startTick: newStartTick,
+        lengthTicks: d.orig.lengthTicks,
+      });
+    }
   }
 
   $effect(() => {
@@ -314,14 +441,18 @@
         {#each Array(cols) as _, c}
           {@const peerColor = peerCellColor(row.midi, c)}
           {@const covering = noteCovering(c, row.midi)}
-          {@const isNoteStart = covering?.startTick === c * STEP_TICKS}
+          {@const hideOriginal = isMovingOriginalCell(c, row.midi)}
+          {@const showOn = Boolean(covering) && !hideOriginal}
+          {@const isNoteStart = showOn && covering?.startTick === c * STEP_TICKS}
+          {@const inGhost = ghostFor(c, row.midi)}
+          {@const ghostStart = inGhost && isGhostStart(c, row.midi)}
           <button
             class="cell"
             class:black-row={row.isAccent}
             class:beat={c % 4 === 0}
-            class:on={Boolean(covering)}
-            class:note-start={isNoteStart}
-            class:ghost={inDragGhost(c, row.midi)}
+            class:on={showOn}
+            class:note-start={isNoteStart || ghostStart}
+            class:ghost={inGhost}
             class:playhead={c === playheadCol}
             class:peer-hover={peerColor != null}
             style="grid-row: {r + 1}; grid-column: {c + 1};{peerColor ? ` --peer-color: ${peerColor};` : ''}"
@@ -329,7 +460,7 @@
             onpointerdown={(e) => onCellPointerDown(e, c, row.midi)}
             onpointerenter={() => onCellPointerEnter(c, row.midi)}
             onpointerup={onCellPointerUp}
-            onpointercancel={() => { dragStart = null; dragEnd = null; }}
+            onpointercancel={() => { drag = null; }}
             aria-label={`${row.label} ${c + 1}`}
           ></button>
         {/each}
