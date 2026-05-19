@@ -76,11 +76,6 @@
     type Project,
     type AutoTargetKind,
   } from './lib/project';
-  import {
-    SUBTRACTIVE_DESCRIPTORS,
-    descriptorById,
-    scaleCcToParam,
-  } from './lib/plugin-descriptors';
   import * as audio from './lib/audio';
   import {
     attachBridge,
@@ -92,6 +87,7 @@
   import { createPluginUiHost, type PluginHost } from './lib/plugin-ui';
   import { parseManifest, type ParseResult } from './lib/plugin-manifest';
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
+  import { buildMidiHandler } from './lib/midi-routing';
   import * as assetStore from './lib/asset-store';
   import { enrichDemoSong } from './lib/demo-enrichment';
   import {
@@ -402,48 +398,26 @@
       const armed = getArmedTrackIdx(p);
       return armed >= 0 ? armed : selectedTrackIdx;
     };
-    midi = createMidiInput({
-      noteOn: (pitch, velocity) => {
-        bridge!.noteOn(routeIdx(), pitch, velocity);
-        if (recording) {
-          recBuffer.push({ pitch, velocity, onMs: performance.now(), offMs: null });
-        }
+    midi = createMidiInput(buildMidiHandler({
+      project: p,
+      bridge: bridge!,
+      routeIdx,
+      isLearnActive: () => learnActive,
+      capturePendingCC: (cc) => { learnPendingCC = cc; },
+      recordNoteOn: (pitch, velocity) => {
+        if (!recording) return;
+        recBuffer.push({ pitch, velocity, onMs: performance.now(), offMs: null });
       },
-      noteOff: (pitch) => {
-        bridge!.noteOff(routeIdx(), pitch);
-        if (recording) {
-          for (let i = recBuffer.length - 1; i >= 0; i--) {
-            if (recBuffer[i].pitch === pitch && recBuffer[i].offMs == null) {
-              recBuffer[i].offMs = performance.now();
-              break;
-            }
+      recordNoteOff: (pitch) => {
+        if (!recording) return;
+        for (let i = recBuffer.length - 1; i >= 0; i--) {
+          if (recBuffer[i].pitch === pitch && recBuffer[i].offMs == null) {
+            recBuffer[i].offMs = performance.now();
+            break;
           }
         }
       },
-      cc: (cc, value) => {
-        // 1. Learn mode: capture the CC# and wait for the user to
-        // click a target param. Don't propagate to the engine.
-        if (learnActive) {
-          learnPendingCC = cc;
-          return;
-        }
-        // 2. Bound CC: drive the bound parameter via Y.Doc → SAB.
-        const binding = getMidiBinding(p, cc);
-        if (binding) {
-          const pluginId = getTrackPluginId(p, binding.trackIdx);
-          if (pluginId === 'builtin:subtractive') {
-            const desc = descriptorById(SUBTRACTIVE_DESCRIPTORS, binding.paramId);
-            if (desc) {
-              setSynthParam(p, binding.trackIdx, binding.paramId, scaleCcToParam(desc, value));
-            }
-          }
-          return;
-        }
-        // 3. Default: forward to the armed track's plugin so the
-        // synth's own MidiCc handler (e.g. sustain pedal) sees it.
-        bridge!.midiCc(routeIdx(), cc, value);
-      },
-    });
+    }));
     const refreshMidi = () => {
       midiStatus = midi!.status;
       midiDevices = midi!.devices.map((d) => ({ id: d.id, name: d.name }));
