@@ -270,6 +270,19 @@ function seedDemoSong(p: Project): void {
       const Eb = 1 << 3;
       const pattern = [C, 0, G, 0, C, 0, G, Eb, C, 0, G, 0, C, 0, G, C];
       pattern.forEach((notes, i) => writeStepNotes(bassClip, i, notes));
+      // Phase-10 M1 — varied per-step velocities so the bass groove
+      // has an audible accent on the downbeats. Active steps get a
+      // velocity > 100 (heavier than the legacy fixed level);
+      // ghost-notes drop to ~65 to push them into the background.
+      // The demo song is the canonical "what the DAW can do" walk-
+      // through, so every new feature must be reachable from it.
+      const bassVelocities = [
+        120, 100, 95,  100,  // downbeat 1 + & 2
+        120, 100, 95,  65,   // downbeat 3, plus the Eb ghost on 7
+        110, 100, 95,  100,
+        110, 100, 95,  80,
+      ];
+      bassVelocities.forEach((v, i) => writeStepVelocity(bassClip, i, v));
     }
     setTrackPan(p, bassIdx, -0.15);
 
@@ -489,6 +502,10 @@ function createStepSeqClip(p: Project, trackId: string, stepNotes: number[]): st
     const step = new Y.Map<unknown>();
     step.set('tick', i * STEP_TICKS);
     step.set('notes', stepNotes[i] >>> 0);
+    // Phase-10 M1 — per-step velocity, default 100 (matches the
+    // legacy fixed-gain trigger). User can drag the velocity lane
+    // in Sequencer.svelte to change it.
+    step.set('velocity', 100);
     cells.push(step);
   }
   steps.push(cells);
@@ -1602,6 +1619,71 @@ export function writeStepNotes(clip: Y.Map<unknown>, index: number, notes: numbe
   const arr = clip.get('steps') as Y.Array<Y.Map<unknown>>;
   const step = arr.get(index);
   step.set('notes', notes >>> 0);
+}
+
+/// Phase-10 M1 — read per-step velocities. Older clips that pre-date
+/// the velocity field fall back to 100 so the engine plays them at
+/// the legacy fixed-gain trigger level.
+export function readStepVelocities(clip: Y.Map<unknown>): number[] {
+  const arr = clip.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr) return Array<number>(STEPS_PER_CLIP).fill(100);
+  return arr.toArray().map((s) => {
+    const v = s.get('velocity');
+    return typeof v === 'number' ? Math.max(1, Math.min(127, v | 0)) : 100;
+  });
+}
+
+export function writeStepVelocity(
+  clip: Y.Map<unknown>,
+  index: number,
+  velocity: number,
+): void {
+  const arr = clip.get('steps') as Y.Array<Y.Map<unknown>>;
+  const step = arr.get(index);
+  step.set('velocity', Math.max(1, Math.min(127, Math.round(velocity))));
+}
+
+/// Wipe every step's notes + reset velocities to 100. Single
+/// transaction so observers see one commit.
+export function clearStepSeqClip(p: Project, clip: Y.Map<unknown>): void {
+  const arr = clip.get('steps') as Y.Array<Y.Map<unknown>>;
+  p.doc.transact(() => {
+    for (let i = 0; i < arr.length; i++) {
+      const cell = arr.get(i);
+      cell.set('notes', 0);
+      cell.set('velocity', 100);
+    }
+  });
+}
+
+/// Fill the pattern with a quick groove: a kick-style hit on every
+/// 4th step plus 4–6 random off-beat hits at varied velocities.
+/// Used by the Randomize button — the goal is a starting point
+/// that's audibly musical, not perfect.
+export function randomizeStepSeqClip(p: Project, clip: Y.Map<unknown>): void {
+  const arr = clip.get('steps') as Y.Array<Y.Map<unknown>>;
+  const len = arr.length;
+  // Pick two pitches that sit nicely together — root + perfect fifth.
+  // Bits map to MIDI offsets above LOW_MIDI (= C3 / 48).
+  const rootBit = 1 << 0;        // C3
+  const fifthBit = 1 << 7;       // G3
+  const octaveBit = 1 << 12;     // C4
+  p.doc.transact(() => {
+    for (let i = 0; i < len; i++) {
+      const cell = arr.get(i);
+      let mask = 0;
+      let vel = 80;
+      if (i % 4 === 0) {
+        mask = rootBit;
+        vel = 110;
+      } else if (Math.random() < 0.35) {
+        mask = Math.random() < 0.5 ? fifthBit : octaveBit;
+        vel = 60 + Math.floor(Math.random() * 50);
+      }
+      cell.set('notes', mask);
+      cell.set('velocity', vel);
+    }
+  });
 }
 
 export function getBpm(p: Project): number {

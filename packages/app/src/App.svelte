@@ -63,8 +63,10 @@
     getTrackColor,
     getArmedTrackIdx,
     getPianoRollClipForTrack,
+    getStepSeqClipForTrack,
     addPianoRollNote,
     readPianoRollNotes,
+    readStepVelocities,
     getBpm,
     getLoopRegion,
     getMidiBinding,
@@ -1141,6 +1143,14 @@
             if (!project) return [];
             const clip = getPianoRollClipForTrack(project, trackIdx);
             return clip ? readPianoRollNotes(clip) : [];
+          },
+          // Phase-10 M1 — per-step velocity readout for the demo
+          // assertion. Returns null when the track has no step-seq
+          // clip (e.g. piano-roll-only tracks).
+          stepVelocities: (trackIdx: number) => {
+            if (!project) return null;
+            const clip = getStepSeqClipForTrack(project, trackIdx);
+            return clip ? readStepVelocities(clip) : null;
           },
           // Phase-4 M4 automation backdoor. Phase-9 polish lays a real
           // graphical lane editor; today we expose the data path so

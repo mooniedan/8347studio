@@ -326,13 +326,20 @@ function instrumentSnapshotBytes(track: Y.Map<unknown>, trackId: string): Uint8A
   return concat([new Uint8Array([INSTR_BUILTIN_SEQ]), u32VarintToBytes(code)]);
 }
 
+/// Encodes the `steps` + `step_velocities` postcard fields back-to-back
+/// so the on-the-wire order matches the struct's declaration. Both
+/// fields are always emitted (count + payload) — empty for non-MIDI
+/// tracks and MIDI tracks without a step-seq clip — because postcard
+/// expects every struct field, in order, in the bytes.
+const EMPTY_STEP_BYTES = concat([u32VarintToBytes(0), u32VarintToBytes(0)]);
+
 function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
   if (track.get('kind') !== 'MIDI') {
-    return u32VarintToBytes(0);
+    return EMPTY_STEP_BYTES;
   }
   const clipIds = track.get('clips') as Y.Array<string> | undefined;
   if (!clipIds || clipIds.length === 0) {
-    return u32VarintToBytes(0);
+    return EMPTY_STEP_BYTES;
   }
   // Find the StepSeq clip if any.
   let stepClip: Y.Map<unknown> | null = null;
@@ -343,16 +350,26 @@ function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array 
       break;
     }
   }
-  if (!stepClip) return u32VarintToBytes(0);
+  if (!stepClip) return EMPTY_STEP_BYTES;
   const steps = stepClip.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
-  if (!steps) return u32VarintToBytes(0);
+  if (!steps) return EMPTY_STEP_BYTES;
   const masks: number[] = [];
+  const velocities: number[] = [];
   for (const cell of steps.toArray()) {
     masks.push(((cell.get('notes') as number) ?? 0) >>> 0);
+    // Phase-10 M1 — per-step velocity. Defaults to 100 to match the
+    // legacy fixed-gain trigger so projects that pre-date this field
+    // keep their loudness.
+    const v = cell.get('velocity');
+    velocities.push(typeof v === 'number' ? Math.max(1, Math.min(127, v | 0)) : 100);
   }
   const parts: Uint8Array[] = [u32VarintToBytes(masks.length)];
   for (const m of masks) {
     parts.push(u32VarintToBytes(m));
+  }
+  parts.push(u32VarintToBytes(velocities.length));
+  if (velocities.length > 0) {
+    parts.push(new Uint8Array(velocities));
   }
   return concat(parts);
 }

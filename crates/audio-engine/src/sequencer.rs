@@ -119,6 +119,10 @@ pub struct Sequencer {
     next_trigger_tick: u64,
     /// Per-step bitmask of active notes; bit k = MIDI note LOW_MIDI + k.
     steps: [u32; STEPS as usize],
+    /// Per-step velocity (1..=127). Phase-10 M1 — applied as a
+    /// 0..1 gain multiplier on every voice triggered at that step.
+    /// Defaults to 100 so legacy projects keep their existing loudness.
+    velocities: [u8; STEPS as usize],
     current_step: u32,
     /// Ticks per step (PPQ-relative). Settable; default 240 (1/16 at PPQ=960).
     ticks_per_step: u32,
@@ -139,6 +143,7 @@ impl Sequencer {
             voices,
             next_trigger_tick: 1,
             steps: [0; STEPS as usize],
+            velocities: [100; STEPS as usize],
             current_step: 0,
             ticks_per_step: DEFAULT_TICKS_PER_STEP,
             playing: false,
@@ -151,6 +156,15 @@ impl Sequencer {
     pub fn set_step_mask(&mut self, i: u32, mask: u32) {
         if (i as usize) < self.steps.len() {
             self.steps[i as usize] = mask & ((1 << NOTES) - 1);
+        }
+    }
+
+    /// Phase-10 M1 — per-step velocity (1..=127). 0 is treated as 1
+    /// to avoid silent steps; the canonical way to silence a step
+    /// is `set_step_mask(i, 0)`.
+    pub fn set_step_velocity(&mut self, i: u32, velocity: u8) {
+        if (i as usize) < self.velocities.len() {
+            self.velocities[i as usize] = velocity.clamp(1, 127);
         }
     }
 
@@ -196,7 +210,8 @@ impl Sequencer {
             let step = ((prev_tick / s) % STEPS as u64) as u32;
             self.current_step = step;
             let mask = self.steps[step as usize];
-            self.reconcile_step(mask);
+            let vel = self.velocities[step as usize];
+            self.reconcile_step(mask, vel);
             self.needs_initial_reconcile = false;
             // Next regular boundary to consider is strictly after prev_tick.
             (prev_tick / s + 1) * s
@@ -210,7 +225,8 @@ impl Sequencer {
         while t < next_tick && count <= STEPS as usize {
             let step = ((t / s) % STEPS as u64) as u32;
             let mask = self.steps[step as usize];
-            self.reconcile_step(mask);
+            let vel = self.velocities[step as usize];
+            self.reconcile_step(mask, vel);
             self.current_step = step;
             t = t.saturating_add(s);
             count += 1;
@@ -232,7 +248,7 @@ impl Sequencer {
         }
     }
 
-    fn trigger_voice(&mut self, midi: u32) {
+    fn trigger_voice(&mut self, midi: u32, velocity: u8) {
         let tick = self.next_trigger_tick;
         self.next_trigger_tick = tick.wrapping_add(1);
         // Prefer idle voices; then fading (released) voices; then oldest held voice.
@@ -250,6 +266,11 @@ impl Sequencer {
             });
         let v = &mut self.voices[idx];
         v.osc.set_frequency(midi_to_hz(midi as f32));
+        // Phase-10 M1 — velocity scales voice gain. We keep the
+        // baseline VOICE_GAIN ceiling and ramp from there so a
+        // velocity of 100 sounds like the legacy fixed-gain trigger.
+        let scale = (velocity as f32 / 100.0).clamp(0.0, 127.0 / 100.0);
+        v.osc.set_gain(VOICE_GAIN * scale);
         v.env.trigger();
         v.midi = midi as i32;
         v.last_triggered = tick;
@@ -258,7 +279,7 @@ impl Sequencer {
     /// Reconcile held voices with the mask of the step we're about to enter:
     /// release any held note that's no longer in the mask, and trigger only
     /// new notes. Notes present in consecutive steps sustain without re-attack.
-    fn reconcile_step(&mut self, mask: u32) {
+    fn reconcile_step(&mut self, mask: u32, velocity: u8) {
         for idx in 0..MAX_VOICES {
             let v = &self.voices[idx];
             if !v.env.is_held() || v.midi < LOW_MIDI as i32 {
@@ -279,7 +300,7 @@ impl Sequencer {
                 .iter()
                 .any(|v| v.env.is_held() && v.midi == midi);
             if !already_held {
-                self.trigger_voice(LOW_MIDI + k);
+                self.trigger_voice(LOW_MIDI + k, velocity);
             }
         }
     }

@@ -162,6 +162,12 @@ impl Engine {
                     for (step_idx, mask) in ts.steps.iter().enumerate() {
                         seq.set_step_mask(step_idx as u32, *mask);
                     }
+                    // Phase-10 M1 — apply per-step velocities. Older
+                    // projects with no velocities field land on the
+                    // default 100 baked into Sequencer::new.
+                    for (step_idx, vel) in ts.step_velocities.iter().enumerate() {
+                        seq.set_step_velocity(step_idx as u32, *vel);
+                    }
                 }
             }
             // Insert chain. Phase-4 M1 always rebuilds — the chain is
@@ -806,6 +812,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Midi,
@@ -821,6 +828,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
                 },
             ],
         };
@@ -854,6 +862,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1023,6 +1032,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1056,6 +1066,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         let bytes = crate::snapshot::encode(&snap);
@@ -1126,6 +1137,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1163,6 +1175,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1226,6 +1239,7 @@ mod tests {
                 ],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1280,6 +1294,7 @@ mod tests {
                 ],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1327,6 +1342,7 @@ mod tests {
                         pre_fader: false,
                     }],
                     audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
                 },
                 TrackSnapshot {
                     kind: TrackKind::Bus,
@@ -1352,6 +1368,7 @@ mod tests {
                     }],
                     sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
                 },
             ],
         };
@@ -1424,6 +1441,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
             loop_region: None,
         };
@@ -1518,6 +1536,7 @@ mod tests {
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                 }],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1613,6 +1632,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1650,6 +1670,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1706,6 +1727,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);
@@ -1772,6 +1794,7 @@ mod tests {
                 inserts: alloc::vec![],
                 sends: alloc::vec![],
                 audio_regions: alloc::vec![],
+                step_velocities: alloc::vec![],
             }],
         };
         e.apply_snapshot(&snap);

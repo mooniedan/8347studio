@@ -9,9 +9,23 @@ The legacy track type ships with a step-seq clip — a **16-step ×
 N-pitch grid**. Click any cell to toggle a note on / off. The
 **Bass** track in the demo song is a step-seq track.
 
-- Velocity defaults to 100.
 - Step length is 1/16 by default and not user-editable today.
 - Cells light up as the playhead crosses them.
+
+### Velocity lane
+
+Below the main grid sits a **velocity lane** — one vertical bar per
+step. Drag a bar up or down to set that step's velocity (range
+30–127, default 100). The bass groove in the Demo Song uses varied
+velocities to accent the downbeats; you can hear the effect by
+clicking **★ Demo Song** and listening to the Bass track.
+
+### Pattern actions
+
+- **Clear** — wipes every step in the visible track's clip.
+- **Randomize** — drops a kick on every 4th step plus 0–6
+  probabilistic off-beat hits at varied velocities. A starting
+  point, not a finished groove.
 
 ## Piano-roll clips
 

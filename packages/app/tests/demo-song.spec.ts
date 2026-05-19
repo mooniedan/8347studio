@@ -115,6 +115,21 @@ test.describe('demo song', () => {
     // Lead has piano-roll notes seeded for the chord progression.
     expect(await pianoRollNoteCount(page, 0)).toBeGreaterThanOrEqual(8);
 
+    // Phase-10 M1 — the demo's bass step-seq carries varied
+    // per-step velocities so the new velocity-lane feature is
+    // audibly exercised by the cumulative regression. We don't pin
+    // exact values (the seed may evolve); we just check at least two
+    // distinct velocities appear among the active steps.
+    const bassVelocities = await page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: { stepVelocities: (trackIdx: number) => Promise<number[] | null> };
+      };
+      return w.__bridge.stepVelocities(1);
+    });
+    expect(bassVelocities).not.toBeNull();
+    const distinct = new Set(bassVelocities!);
+    expect(distinct.size).toBeGreaterThanOrEqual(2);
+
     // Automation lane present on track 0.
     expect(await automationLaneCount(page)).toBeGreaterThanOrEqual(1);
 

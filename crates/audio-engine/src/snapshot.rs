@@ -68,6 +68,13 @@ pub struct TrackSnapshot {
     /// Per-step bitmask for the track's first StepSeq clip (Phase 1
     /// only ever has one). Empty when the track has no step clip.
     pub steps: Vec<u32>,
+    /// Per-step velocity (1..=127). Phase-10 M1 — parallel to
+    /// `steps` and same length when present. When empty / shorter,
+    /// the sequencer falls back to a default of 100 for any step
+    /// that doesn't have an explicit value (back-compat with old
+    /// projects).
+    #[serde(default)]
+    pub step_velocities: Vec<u8>,
     /// Notes for the track's first PianoRoll clip. Empty when the
     /// track has no piano-roll clip. Phase-2 M4 introduced.
     pub piano_roll_notes: Vec<NoteSnapshot>,
