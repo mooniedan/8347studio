@@ -6,6 +6,14 @@
 //
 // The struct is *not* the same shape as the Y.Doc — it's the minimum the
 // engine consumes. The Y→snapshot transform lives in engine-bridge.ts.
+//
+// **Wire-format mirror:** `packages/app/src/lib/snapshot-codec.ts` holds
+// the schema-walked TS encoder that turns plain JS objects into the
+// same postcard bytes this module's `decode` reads. When you add /
+// rename / reorder a field below, update the matching `*_SCHEMA` and
+// TypeScript interface there in the same commit. Empty fixture
+// `..::Default::default()`-style additions also need a sweep in
+// `engine.rs` test snapshots.
 
 use serde::{Deserialize, Serialize};
 

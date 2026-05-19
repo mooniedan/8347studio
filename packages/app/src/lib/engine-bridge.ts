@@ -21,6 +21,22 @@ import {
 } from './project';
 import * as assetStore from './asset-store';
 import * as audio from './audio';
+import {
+  encodeProjectSnapshot,
+  type AudioRegionSnapshot,
+  type AutoTarget,
+  type AutomationLane,
+  type BranchSnapshot,
+  type InsertKind,
+  type InsertSnapshot,
+  type InstrumentSnapshot,
+  type LoopRegion,
+  type NoteSnapshot,
+  type ProjectSnapshot,
+  type SendSnapshot,
+  type TrackKind,
+  type TrackSnapshot,
+} from './snapshot-codec';
 
 // ---- SAB ring layout (mirrors crates/audio-engine/src/sab_ring.rs) -----
 
@@ -219,20 +235,15 @@ export class RingWriter {
 }
 
 // ---- Snapshot builder (mirrors snapshot.rs) ---------------------------
+//
+// Wire format details live in `lib/snapshot-codec.ts`. This section
+// only walks the Y.Doc and produces plain JS objects matching the
+// `ProjectSnapshot` interface; the schema-walked encoder turns those
+// objects into postcard-compatible bytes.
 
 export interface SnapshotEnvelope {
   bytes: Uint8Array;
 }
-
-const TK_MIDI = 0;
-const TK_AUDIO = 1;
-const TK_BUS = 2;
-
-const INSTR_BUILTIN_SEQ = 0;
-const INSTR_NONE = 1;
-const INSTR_SUBTRACTIVE = 2;
-const INSTR_DRUMKIT = 3;
-const INSTR_WASM = 4;
 
 /// Phase-8 M3b — per-track wasm plugin runtime state. Handles are
 /// assigned by the audio worklet at plugin-load time; persisting them
@@ -258,140 +269,85 @@ export function getWasmPluginAttachment(trackId: string): WasmPluginAttachment |
   return wasmPluginAttachments.get(trackId);
 }
 
-function encodeString(s: string): Uint8Array {
-  const utf8 = new TextEncoder().encode(s);
-  return concat([u32VarintToBytes(utf8.length), utf8]);
+function trackKindFromYjs(kind: unknown): TrackKind {
+  if (kind === 'Audio') return 'Audio';
+  if (kind === 'Bus') return 'Bus';
+  return 'Midi';
 }
 
-function trackKindFromYjs(kind: unknown): number {
-  if (kind === 'Audio') return TK_AUDIO;
-  if (kind === 'Bus') return TK_BUS;
-  return TK_MIDI;
-}
-
-function instrumentSnapshotBytes(track: Y.Map<unknown>, trackId: string): Uint8Array {
+function extractInstrument(track: Y.Map<unknown>, trackId: string): InstrumentSnapshot {
   // Phase-8 M3b — a wasm plugin attached at runtime overrides any
-  // builtin instrument the Y.Doc currently advertises. The
-  // attachment table is in-memory only; reloads will re-load the
-  // plugin via the registry path (M5) and re-attach.
+  // builtin instrument the Y.Doc currently advertises.
   const wasmAttach = wasmPluginAttachments.get(trackId);
   if (wasmAttach) {
-    const params: [number, number][] = [];
-    const parts: Uint8Array[] = [
-      new Uint8Array([INSTR_WASM]),
-      u32VarintToBytes(wasmAttach.handle),
-      new Uint8Array([wasmAttach.isInstrument ? 1 : 0]),
-      u32VarintToBytes(params.length),
-    ];
-    for (const [id, val] of params) {
-      parts.push(u32VarintToBytes(id));
-      parts.push(f32ToBytes(val));
-    }
-    return concat(parts);
+    return {
+      kind: 'Wasm',
+      handle: wasmAttach.handle,
+      isInstrument: wasmAttach.isInstrument,
+      params: [],
+    };
   }
-
-  const kind = track.get('kind');
-  if (kind !== 'MIDI') {
-    return new Uint8Array([INSTR_NONE]);
-  }
+  if (track.get('kind') !== 'MIDI') return { kind: 'None' };
   const instr = track.get('instrumentSlot') as Y.Map<unknown> | undefined;
-  if (!instr) return new Uint8Array([INSTR_NONE]);
+  if (!instr) return { kind: 'None' };
   const pluginId = instr.get('pluginId') as string | undefined;
   const params = instr.get('params') as Y.Map<unknown> | undefined;
 
   if (pluginId === 'builtin:subtractive' || pluginId === 'builtin:drumkit') {
     const entries: [number, number][] = [];
-    if (params) {
-      params.forEach((v, k) => {
-        const id = parseInt(k, 10);
-        if (!Number.isNaN(id) && typeof v === 'number') {
-          entries.push([id, v]);
-        }
-      });
-    }
-    const tag = pluginId === 'builtin:drumkit' ? INSTR_DRUMKIT : INSTR_SUBTRACTIVE;
-    const parts: Uint8Array[] = [
-      new Uint8Array([tag]),
-      u32VarintToBytes(entries.length),
-    ];
-    for (const [id, val] of entries) {
-      parts.push(u32VarintToBytes(id));
-      parts.push(f32ToBytes(val));
-    }
-    return concat(parts);
+    params?.forEach((v, k) => {
+      const id = parseInt(k, 10);
+      if (!Number.isNaN(id) && typeof v === 'number') entries.push([id, v]);
+    });
+    return pluginId === 'builtin:drumkit'
+      ? { kind: 'Drumkit', params: entries }
+      : { kind: 'Subtractive', params: entries };
   }
 
   const w = params?.get('waveform');
   const code = w === 'saw' ? 1 : w === 'square' ? 2 : 0;
-  return concat([new Uint8Array([INSTR_BUILTIN_SEQ]), u32VarintToBytes(code)]);
+  return { kind: 'BuiltinSequencer', waveform: code };
 }
 
-/// Encodes the `steps` + `step_velocities` postcard fields back-to-back
-/// so the on-the-wire order matches the struct's declaration. Both
-/// fields are always emitted (count + payload) — empty for non-MIDI
-/// tracks and MIDI tracks without a step-seq clip — because postcard
-/// expects every struct field, in order, in the bytes.
-const EMPTY_STEP_BYTES = concat([u32VarintToBytes(0), u32VarintToBytes(0)]);
-
-function stepBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
-  if (track.get('kind') !== 'MIDI') {
-    return EMPTY_STEP_BYTES;
-  }
+/// Walks the track's first StepSeq clip and returns `(masks, velocities)`
+/// pre-defaulted to `[]` if no clip exists. Non-MIDI tracks always
+/// short-circuit to empty arrays.
+function extractStepData(
+  project: Project,
+  track: Y.Map<unknown>,
+): { masks: number[]; velocities: number[] } {
+  const empty = { masks: [] as number[], velocities: [] as number[] };
+  if (track.get('kind') !== 'MIDI') return empty;
   const clipIds = track.get('clips') as Y.Array<string> | undefined;
-  if (!clipIds || clipIds.length === 0) {
-    return EMPTY_STEP_BYTES;
-  }
-  // Find the StepSeq clip if any.
+  if (!clipIds || clipIds.length === 0) return empty;
   let stepClip: Y.Map<unknown> | null = null;
   for (const cid of clipIds.toArray()) {
     const c = project.clipById.get(cid);
-    if (c?.get('kind') === 'StepSeq') {
-      stepClip = c;
-      break;
-    }
+    if (c?.get('kind') === 'StepSeq') { stepClip = c; break; }
   }
-  if (!stepClip) return EMPTY_STEP_BYTES;
+  if (!stepClip) return empty;
   const steps = stepClip.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
-  if (!steps) return EMPTY_STEP_BYTES;
+  if (!steps) return empty;
   const masks: number[] = [];
   const velocities: number[] = [];
   for (const cell of steps.toArray()) {
     masks.push(((cell.get('notes') as number) ?? 0) >>> 0);
-    // Phase-10 M1 — per-step velocity. Defaults to 100 to match the
-    // legacy fixed-gain trigger so projects that pre-date this field
-    // keep their loudness.
     const v = cell.get('velocity');
     velocities.push(typeof v === 'number' ? Math.max(1, Math.min(127, v | 0)) : 100);
   }
-  const parts: Uint8Array[] = [u32VarintToBytes(masks.length)];
-  for (const m of masks) {
-    parts.push(u32VarintToBytes(m));
-  }
-  parts.push(u32VarintToBytes(velocities.length));
-  if (velocities.length > 0) {
-    parts.push(new Uint8Array(velocities));
-  }
-  return concat(parts);
+  return { masks, velocities };
 }
 
-// InsertKind discriminants — must match
-// crates/audio-engine/src/snapshot.rs::InsertKind. Append-only.
-const INSERT_GAIN = 0;
-const INSERT_EQ = 1;
-const INSERT_COMPRESSOR = 2;
-const INSERT_REVERB = 3;
-const INSERT_DELAY = 4;
-const INSERT_CONTAINER = 5;
-const INSERT_WASM = 6;
-
-const INSERT_KIND_BY_PLUGIN_ID: Record<string, number> = {
-  'builtin:gain': INSERT_GAIN,
-  'builtin:eq': INSERT_EQ,
-  'builtin:compressor': INSERT_COMPRESSOR,
-  'builtin:reverb': INSERT_REVERB,
-  'builtin:delay': INSERT_DELAY,
-  'builtin:container': INSERT_CONTAINER,
-  'wasm': INSERT_WASM,
+/// Plugin-id → InsertKind variant. Must match the variant order
+/// declared in snapshot-codec.ts (which mirrors snapshot.rs).
+const INSERT_VARIANT_BY_PLUGIN_ID: Record<string, InsertKind['kind']> = {
+  'builtin:gain':       'Gain',
+  'builtin:eq':         'Eq',
+  'builtin:compressor': 'Compressor',
+  'builtin:reverb':     'Reverb',
+  'builtin:delay':      'Delay',
+  'builtin:container':  'Container',
+  'wasm':               'Wasm',
 };
 
 /// Phase-8 M5b — runtime resolver for `manifestId → handle`. The
@@ -420,98 +376,76 @@ function resolveWasmHandle(slot: Y.Map<unknown>): number | undefined {
   return undefined;
 }
 
-/// Encode a single insert (and its branches if it's a Container).
-/// Returns null if the slot's pluginId is unknown so the caller can
-/// keep the count in sync with the encoded payloads.
-function insertSnapshotBytes(slot: Y.Map<unknown>): Uint8Array | null {
+/// Extract one insert (recursively for Container branches). Returns
+/// null when the slot is unusable (unknown plugin id or a wasm
+/// insert with no live handle); the caller drops it so the count
+/// matches the encoded payloads.
+function extractInsert(slot: Y.Map<unknown>): InsertSnapshot | null {
   const pid = slot.get('pluginId') as string | undefined;
-  if (!pid || !(pid in INSERT_KIND_BY_PLUGIN_ID)) return null;
-  const kindByte = INSERT_KIND_BY_PLUGIN_ID[pid];
-  // Phase-8 M6/M5b — wasm inserts skip the encoding if no live
-  // handle can be resolved (attachment incomplete, plugin failed to
-  // load on boot, etc.). The engine treats the slot as absent — the
-  // signal flows around it untouched.
-  let resolvedHandle: number | undefined;
-  if (pid === 'wasm') {
-    resolvedHandle = resolveWasmHandle(slot);
-    if (resolvedHandle === undefined) return null;
+  if (!pid || !(pid in INSERT_VARIANT_BY_PLUGIN_ID)) return null;
+  const variant = INSERT_VARIANT_BY_PLUGIN_ID[pid];
+  let kind: InsertKind;
+  if (variant === 'Wasm') {
+    const handle = resolveWasmHandle(slot);
+    if (handle === undefined) return null;
+    kind = { kind: 'Wasm', handle };
+  } else {
+    kind = { kind: variant } as InsertKind;
   }
-  const params = slot.get('params') as Y.Map<unknown> | undefined;
-  const entries: [number, number][] = [];
-  params?.forEach((v, k) => {
+  const paramsMap = slot.get('params') as Y.Map<unknown> | undefined;
+  const params: [number, number][] = [];
+  paramsMap?.forEach((v, k) => {
     const id = parseInt(k, 10);
-    if (!Number.isNaN(id) && typeof v === 'number') entries.push([id, v]);
+    if (!Number.isNaN(id) && typeof v === 'number') params.push([id, v]);
   });
-  const parts: Uint8Array[] = [];
-  parts.push(new Uint8Array([kindByte]));
-  // Wasm variant carries its handle as the first field of the
-  // enum, matching the Rust `InsertKind::Wasm { handle: u32 }`
-  // layout postcard expects.
-  if (pid === 'wasm') {
-    parts.push(u32VarintToBytes(resolvedHandle!));
-  }
-  parts.push(u32VarintToBytes(entries.length));
-  for (const [id, val] of entries) {
-    parts.push(u32VarintToBytes(id));
-    parts.push(f32ToBytes(val));
-  }
-  parts.push(new Uint8Array([slot.get('bypass') ? 1 : 0]));
-  // Branches for Container plugins. For non-Container slots this
-  // stays empty (matches the Rust struct layout's default).
-  const branches = slot.get('branches') as Y.Array<Y.Map<unknown>> | undefined;
-  const validBranches: Y.Map<unknown>[] = [];
-  branches?.forEach((b) => validBranches.push(b));
-  parts.push(u32VarintToBytes(validBranches.length));
-  for (const branch of validBranches) {
-    parts.push(f32ToBytes((branch.get('gain') as number | undefined) ?? 1.0));
-    const inner = branch.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
-    const innerBytes: Uint8Array[] = [];
-    inner?.forEach((sub) => {
-      const bytes = insertSnapshotBytes(sub);
-      if (bytes) innerBytes.push(bytes);
+  const branchesArr = slot.get('branches') as Y.Array<Y.Map<unknown>> | undefined;
+  const branches: BranchSnapshot[] = [];
+  branchesArr?.forEach((b) => {
+    const gain = (b.get('gain') as number | undefined) ?? 1.0;
+    const innerArr = b.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
+    const inner: InsertSnapshot[] = [];
+    innerArr?.forEach((sub) => {
+      const ins = extractInsert(sub);
+      if (ins) inner.push(ins);
     });
-    parts.push(u32VarintToBytes(innerBytes.length));
-    for (const ib of innerBytes) parts.push(ib);
-  }
-  return concat(parts);
-}
-
-function insertBytesForTrack(track: Y.Map<unknown>): Uint8Array {
-  const arr = track.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
-  if (!arr || arr.length === 0) return u32VarintToBytes(0);
-  const encoded: Uint8Array[] = [];
-  arr.forEach((slot) => {
-    const bytes = insertSnapshotBytes(slot);
-    if (bytes) encoded.push(bytes);
+    branches.push({ gain, inserts: inner });
   });
-  const parts: Uint8Array[] = [u32VarintToBytes(encoded.length)];
-  for (const e of encoded) parts.push(e);
-  return concat(parts);
+  return {
+    kind,
+    params,
+    bypass: Boolean(slot.get('bypass')),
+    branches,
+  };
 }
 
-function sendBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
+function extractInserts(track: Y.Map<unknown>): InsertSnapshot[] {
+  const arr = track.get('inserts') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr) return [];
+  const out: InsertSnapshot[] = [];
+  arr.forEach((slot) => {
+    const ins = extractInsert(slot);
+    if (ins) out.push(ins);
+  });
+  return out;
+}
+
+function extractSends(project: Project, track: Y.Map<unknown>): SendSnapshot[] {
   const arr = track.get('sends') as Y.Array<Y.Map<unknown>> | undefined;
-  if (!arr || arr.length === 0) return u32VarintToBytes(0);
+  if (!arr) return [];
   const trackIds = project.tracks.toArray();
-  const known: { target: number; level: number; preFader: boolean }[] = [];
+  const out: SendSnapshot[] = [];
   arr.forEach((s) => {
     const tid = s.get('targetTrackId') as string | undefined;
     if (!tid) return;
     const idx = trackIds.indexOf(tid);
     if (idx < 0) return;
-    known.push({
-      target: idx,
+    out.push({
+      targetTrack: idx,
       level: (s.get('level') as number | undefined) ?? 0,
       preFader: Boolean(s.get('preFader')),
     });
   });
-  const parts: Uint8Array[] = [u32VarintToBytes(known.length)];
-  for (const k of known) {
-    parts.push(u32VarintToBytes(k.target));
-    parts.push(f32ToBytes(k.level));
-    parts.push(new Uint8Array([k.preFader ? 1 : 0]));
-  }
-  return concat(parts);
+  return out;
 }
 
 // Hash → asset_id map. Phase-5 M3 — assigned monotonically per
@@ -566,168 +500,132 @@ export async function registerMissingAssets(project: Project): Promise<void> {
   }
 }
 
-/// Encode the track's audio regions. Phase-5 M1 wire format:
-///   u32 varint count, then for each region:
-///     u32 varint asset_id
-///     u64 varint start_sample
-///     u64 varint length_samples
-///     u64 varint asset_offset_samples
-///     f32 LE gain
-///     u32 varint fade_in_samples
-///     u32 varint fade_out_samples
-function audioRegionBytesForTrack(track: Y.Map<unknown>): Uint8Array {
+function extractAudioRegions(track: Y.Map<unknown>): AudioRegionSnapshot[] {
   const arr = track.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined;
-  if (!arr || arr.length === 0) return u32VarintToBytes(0);
-  // Skip regions whose asset hash hasn't been registered yet — the
-  // bridge schedules registration on the next rebuild.
-  const valid: { assetId: number; startSample: number; lengthSamples: number; offset: number; gain: number; fadeIn: number; fadeOut: number }[] = [];
+  if (!arr) return [];
+  const out: AudioRegionSnapshot[] = [];
   arr.forEach((r) => {
     const hash = r.get('assetHash') as string | undefined;
     if (!hash) return;
     const assetId = hashToAssetId.get(hash);
+    // Drop regions whose asset hasn't been registered with the engine
+    // yet; the next snapshot rebuild after register catches them.
     if (assetId == null || !registeredAssetIds.has(assetId)) return;
-    valid.push({
+    out.push({
       assetId,
       startSample: (r.get('startSample') as number | undefined) ?? 0,
       lengthSamples: (r.get('lengthSamples') as number | undefined) ?? 0,
-      offset: (r.get('assetOffsetSamples') as number | undefined) ?? 0,
+      assetOffsetSamples: (r.get('assetOffsetSamples') as number | undefined) ?? 0,
       gain: (r.get('gain') as number | undefined) ?? 1.0,
-      fadeIn: (r.get('fadeInSamples') as number | undefined) ?? 0,
-      fadeOut: (r.get('fadeOutSamples') as number | undefined) ?? 0,
+      fadeInSamples: (r.get('fadeInSamples') as number | undefined) ?? 0,
+      fadeOutSamples: (r.get('fadeOutSamples') as number | undefined) ?? 0,
     });
   });
-  const parts: Uint8Array[] = [u32VarintToBytes(valid.length)];
-  for (const r of valid) {
-    parts.push(u32VarintToBytes(r.assetId));
-    parts.push(u64VarintToBytes(r.startSample));
-    parts.push(u64VarintToBytes(r.lengthSamples));
-    parts.push(u64VarintToBytes(r.offset));
-    parts.push(f32ToBytes(r.gain));
-    parts.push(u32VarintToBytes(r.fadeIn));
-    parts.push(u32VarintToBytes(r.fadeOut));
-  }
-  return concat(parts);
+  return out;
 }
 
-function pianoRollBytesForTrack(project: Project, track: Y.Map<unknown>): Uint8Array {
-  if (track.get('kind') !== 'MIDI') {
-    return u32VarintToBytes(0);
-  }
+function extractPianoRollNotes(project: Project, track: Y.Map<unknown>): NoteSnapshot[] {
+  if (track.get('kind') !== 'MIDI') return [];
   const clipIds = track.get('clips') as Y.Array<string> | undefined;
-  if (!clipIds || clipIds.length === 0) {
-    return u32VarintToBytes(0);
-  }
+  if (!clipIds || clipIds.length === 0) return [];
   let pianoClip: Y.Map<unknown> | null = null;
   for (const cid of clipIds.toArray()) {
     const c = project.clipById.get(cid);
-    if (c?.get('kind') === 'PianoRoll') {
-      pianoClip = c;
-      break;
-    }
+    if (c?.get('kind') === 'PianoRoll') { pianoClip = c; break; }
   }
-  if (!pianoClip) return u32VarintToBytes(0);
+  if (!pianoClip) return [];
   const notes = pianoClip.get('notes') as Y.Array<Y.Map<unknown>> | undefined;
-  if (!notes || notes.length === 0) return u32VarintToBytes(0);
-  const parts: Uint8Array[] = [u32VarintToBytes(notes.length)];
-  for (const n of notes.toArray()) {
-    const pitch = ((n.get('pitch') as number | undefined) ?? 60) & 0xff;
-    const velocity = ((n.get('velocity') as number | undefined) ?? 100) & 0xff;
-    const startTick = (n.get('startTick') as number | undefined) ?? 0;
-    const lengthTicks = (n.get('lengthTicks') as number | undefined) ?? 0;
-    parts.push(new Uint8Array([pitch, velocity]));
-    parts.push(u64VarintToBytes(startTick));
-    parts.push(u64VarintToBytes(lengthTicks));
-  }
-  return concat(parts);
+  if (!notes) return [];
+  const out: NoteSnapshot[] = [];
+  notes.forEach((n) => {
+    out.push({
+      pitch:       ((n.get('pitch')       as number | undefined) ?? 60) & 0xff,
+      velocity:    ((n.get('velocity')    as number | undefined) ?? 100) & 0xff,
+      startTick:    (n.get('startTick')   as number | undefined) ?? 0,
+      lengthTicks:  (n.get('lengthTicks') as number | undefined) ?? 0,
+    });
+  });
+  return out;
 }
 
-// AutoTarget discriminants — must match
-// crates/audio-engine/src/snapshot.rs::AutoTarget. Append-only.
-const AUTO_TARGET_INSTRUMENT = 0;
-const AUTO_TARGET_INSERT = 1;
-
-function automationBytes(project: Project): Uint8Array {
+function extractAutomation(project: Project): AutomationLane[] {
   const root = (project.automation as unknown) as Y.Map<Y.Map<unknown>>;
   const trackIds = project.tracks.toArray();
-  const lanes: { trackIdx: number; target: number; slotIdx: number; paramId: number; points: { tick: number; value: number }[] }[] = [];
+  const out: AutomationLane[] = [];
   root.forEach((lane, key) => {
     const parts = key.split(':');
     if (parts.length !== 4) return;
-    const trackId = parts[0];
-    const target = parts[1];
-    const slotIdx = parseInt(parts[2], 10);
-    const paramId = parseInt(parts[3], 10);
+    const [trackId, target, slotStr, paramStr] = parts;
+    const slotIdx = parseInt(slotStr, 10);
+    const paramId = parseInt(paramStr, 10);
     const trackIdx = trackIds.indexOf(trackId);
     if (trackIdx < 0 || Number.isNaN(slotIdx) || Number.isNaN(paramId)) return;
-    const targetByte =
-      target === 'insert' ? AUTO_TARGET_INSERT : AUTO_TARGET_INSTRUMENT;
     const points = lane.get('points') as Y.Array<Y.Map<unknown>> | undefined;
     if (!points || points.length === 0) return;
     const pts: { tick: number; value: number }[] = [];
     points.forEach((pm) => {
-      const tick = (pm.get('tick') as number | undefined) ?? 0;
-      const value = (pm.get('value') as number | undefined) ?? 0;
-      pts.push({ tick: Math.max(0, Math.floor(tick)), value });
+      const tick = Math.max(0, Math.floor((pm.get('tick')  as number | undefined) ?? 0));
+      const value =                       (pm.get('value') as number | undefined) ?? 0;
+      pts.push({ tick, value });
     });
     pts.sort((a, b) => a.tick - b.tick);
-    lanes.push({ trackIdx, target: targetByte, slotIdx, paramId, points: pts });
+    const tgt: AutoTarget = target === 'insert'
+      ? { kind: 'Insert', slotIdx }
+      : { kind: 'Instrument' };
+    out.push({ trackIdx, target: tgt, paramId, points: pts });
   });
-  const parts: Uint8Array[] = [u32VarintToBytes(lanes.length)];
-  for (const lane of lanes) {
-    parts.push(u32VarintToBytes(lane.trackIdx));
-    // AutoTarget enum: 0 byte for Instrument; 1 byte + slot_idx varint for Insert.
-    parts.push(new Uint8Array([lane.target]));
-    if (lane.target === AUTO_TARGET_INSERT) {
-      parts.push(u32VarintToBytes(lane.slotIdx));
-    }
-    parts.push(u32VarintToBytes(lane.paramId));
-    parts.push(u32VarintToBytes(lane.points.length));
-    for (const p of lane.points) {
-      parts.push(u64VarintToBytes(p.tick));
-      parts.push(f32ToBytes(p.value));
-    }
-  }
-  return concat(parts);
+  return out;
 }
 
-export function buildSnapshot(project: Project): Uint8Array {
-  const masterGain = (project.meta.get('masterGain') as number | undefined) ?? 1.0;
-  const trackBytes: Uint8Array[] = [];
+function extractLoopRegion(project: Project): LoopRegion | null {
+  const lr = project.meta.get('loopRegion') as
+    | { startTick?: number; endTick?: number }
+    | undefined;
+  if (!lr || typeof lr.startTick !== 'number' || typeof lr.endTick !== 'number') {
+    return null;
+  }
+  const startTick = Math.max(0, Math.floor(lr.startTick));
+  const endTick = Math.max(0, Math.floor(lr.endTick));
+  if (endTick <= startTick) return null;
+  return { startTick, endTick };
+}
+
+/// Walk the Y.Doc and return the snapshot as a plain JS object. The
+/// encoder in `snapshot-codec.ts` handles bytes.
+export function extractSnapshot(project: Project): ProjectSnapshot {
+  const tracks: TrackSnapshot[] = [];
   for (const id of project.tracks.toArray()) {
     const track = project.trackById.get(id);
     if (!track) continue;
-    const kind = trackKindFromYjs(track.get('kind'));
-    const name = (track.get('name') as string | undefined) ?? '';
-    const gain = (track.get('gain') as number | undefined) ?? 1.0;
-    const pan = (track.get('pan') as number | undefined) ?? 0.0;
-    const mute = (track.get('mute') as boolean | undefined) ?? false;
-    const solo = (track.get('solo') as boolean | undefined) ?? false;
     const instr = track.get('instrumentSlot') as Y.Map<unknown> | undefined;
-    const voices = (instr?.get('voices') as number | undefined) ?? 16;
-    trackBytes.push(
-      concat([
-        new Uint8Array([kind]),
-        encodeString(name),
-        f32ToBytes(gain),
-        f32ToBytes(pan),
-        new Uint8Array([mute ? 1 : 0, solo ? 1 : 0]),
-        u32VarintToBytes(voices),
-        instrumentSnapshotBytes(track, id),
-        stepBytesForTrack(project, track),
-        pianoRollBytesForTrack(project, track),
-        insertBytesForTrack(track),
-        sendBytesForTrack(project, track),
-        audioRegionBytesForTrack(track),
-      ]),
-    );
+    const steps = extractStepData(project, track);
+    tracks.push({
+      kind:           trackKindFromYjs(track.get('kind')),
+      name:           (track.get('name') as string | undefined) ?? '',
+      gain:           (track.get('gain') as number | undefined) ?? 1.0,
+      pan:            (track.get('pan')  as number | undefined) ?? 0.0,
+      mute:           (track.get('mute') as boolean | undefined) ?? false,
+      solo:           (track.get('solo') as boolean | undefined) ?? false,
+      voices:         (instr?.get('voices') as number | undefined) ?? 16,
+      instrument:     extractInstrument(track, id),
+      steps:          steps.masks,
+      stepVelocities: steps.velocities,
+      pianoRollNotes: extractPianoRollNotes(project, track),
+      inserts:        extractInserts(track),
+      sends:          extractSends(project, track),
+      audioRegions:   extractAudioRegions(track),
+    });
   }
-  return concat([
-    f32ToBytes(masterGain),
-    u32VarintToBytes(trackBytes.length),
-    ...trackBytes,
-    automationBytes(project),
-    loopRegionBytes(project),
-  ]);
+  return {
+    masterGain: (project.meta.get('masterGain') as number | undefined) ?? 1.0,
+    tracks,
+    automation: extractAutomation(project),
+    loopRegion: extractLoopRegion(project),
+  };
+}
+
+export function buildSnapshot(project: Project): Uint8Array {
+  return encodeProjectSnapshot(extractSnapshot(project));
 }
 
 function serializeLoopRegion(project: Project): string {
@@ -736,29 +634,6 @@ function serializeLoopRegion(project: Project): string {
     | undefined;
   if (!lr) return 'none';
   return `${lr.startTick ?? 0}:${lr.endTick ?? 0}`;
-}
-
-/// Encode `meta.loopRegion` (when present + valid) as postcard's
-/// Option<LoopRegion> wire format: a 1-byte tag (0=None, 1=Some)
-/// optionally followed by two u64 varints. Mirrors
-/// crates/audio-engine/src/snapshot.rs::LoopRegion.
-function loopRegionBytes(project: Project): Uint8Array {
-  const lr = project.meta.get('loopRegion') as
-    | { startTick: number; endTick: number }
-    | undefined;
-  if (!lr || typeof lr.startTick !== 'number' || typeof lr.endTick !== 'number') {
-    return new Uint8Array([0]);
-  }
-  const start = Math.max(0, Math.floor(lr.startTick));
-  const end = Math.max(0, Math.floor(lr.endTick));
-  if (end <= start) {
-    return new Uint8Array([0]);
-  }
-  return concat([
-    new Uint8Array([1]),
-    u64VarintToBytes(start),
-    u64VarintToBytes(end),
-  ]);
 }
 
 // ---- Public bridge API used by App.svelte -----------------------------
