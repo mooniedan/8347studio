@@ -227,10 +227,108 @@ export function createServer({
   token = process.env.SYNC_TOKEN ?? null,
 } = {}) {
   const registry = makeRoomRegistry();
+
+  // Phase-9 M2 — content-addressed asset bucket. Audio bytes are
+  // stored by their SHA-256 hash so identical recordings dedupe.
+  // In-memory for the M2 cut; production wires this up to S3 / R2 /
+  // a filesystem so durability survives a restart.
+  const assets = new Map(); // hash -> { bytes: Uint8Array, contentType: string }
+  const ASSET_HASH = /^[0-9a-f]{64}$/i;
+  function parseAssetHash(req) {
+    const m = req.url.match(/^\/asset\/([0-9a-fA-F]+)(?:\?|$)/);
+    if (!m) return null;
+    const hash = m[1].toLowerCase();
+    if (!ASSET_HASH.test(hash)) return null;
+    return hash;
+  }
+  const ASSET_CORS = {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, PUT, OPTIONS',
+    'access-control-allow-headers': 'content-type, authorization',
+    // The browser PUTs into the bucket from a `crossOriginIsolated`
+    // page; the request needs to round-trip without breaking that
+    // isolation, hence the CORP header. The asset bytes themselves
+    // are opaque to the page (it just stashes them in OPFS), so
+    // cross-origin reads are fine.
+    'cross-origin-resource-policy': 'cross-origin',
+  };
+
   const httpServer = http.createServer((req, res) => {
     if (req.url === '/healthz') {
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('ok');
+      return;
+    }
+    if (req.method === 'OPTIONS' && req.url.startsWith('/asset/')) {
+      res.writeHead(204, ASSET_CORS);
+      res.end();
+      return;
+    }
+    if (req.method === 'PUT' && req.url.startsWith('/asset/')) {
+      const hash = parseAssetHash(req);
+      if (!hash) {
+        res.writeHead(400, ASSET_CORS);
+        res.end('bad hash');
+        return;
+      }
+      if (token) {
+        const url = new URL(req.url, 'http://_/');
+        if (url.searchParams.get('token') !== token) {
+          res.writeHead(401, ASSET_CORS);
+          res.end();
+          return;
+        }
+      }
+      const chunks = [];
+      let received = 0;
+      const MAX = 64 * 1024 * 1024; // 64 MiB safety cap for in-memory store
+      req.on('data', (c) => {
+        received += c.length;
+        if (received > MAX) {
+          req.destroy();
+          return;
+        }
+        chunks.push(c);
+      });
+      req.on('end', () => {
+        if (received > MAX) {
+          res.writeHead(413, ASSET_CORS);
+          res.end('asset too large');
+          return;
+        }
+        const bytes = Buffer.concat(chunks);
+        // Idempotent: first PUT wins, subsequent PUTs of the same
+        // hash are a no-op (content-addressed so the body matches).
+        if (!assets.has(hash)) {
+          assets.set(hash, {
+            bytes,
+            contentType: req.headers['content-type'] ?? 'application/octet-stream',
+          });
+        }
+        res.writeHead(204, ASSET_CORS);
+        res.end();
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url.startsWith('/asset/')) {
+      const hash = parseAssetHash(req);
+      if (!hash) {
+        res.writeHead(400, ASSET_CORS);
+        res.end('bad hash');
+        return;
+      }
+      const entry = assets.get(hash);
+      if (!entry) {
+        res.writeHead(404, ASSET_CORS);
+        res.end('not found');
+        return;
+      }
+      res.writeHead(200, {
+        ...ASSET_CORS,
+        'content-type': entry.contentType,
+        'content-length': String(entry.bytes.length),
+      });
+      res.end(entry.bytes);
       return;
     }
     res.writeHead(404);

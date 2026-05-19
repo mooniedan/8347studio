@@ -9,6 +9,12 @@
 // This module is browser-only; the worklet doesn't touch it directly
 // (the engine's PCM cache is populated via postMessage register_asset
 // — see engine-bridge.ts).
+//
+// Phase-9 M2: when a remote asset store is configured, `putBytes`
+// fires-and-forgets an upload to the bucket and `ensureLocal` will
+// download a hash from the bucket into OPFS on demand.
+
+import { getRemoteAssetStore } from './asset-storage-remote';
 
 const OPFS_DIR = '8347-assets';
 
@@ -62,7 +68,42 @@ export async function putBytes(bytes: Uint8Array): Promise<string> {
     await writable.write(bytes as unknown as FileSystemWriteChunkType);
     await writable.close();
   }
+  // Phase-9 M2 — fire-and-forget cloud upload. Failures are
+  // non-fatal: the asset still plays locally, just not on a peer's
+  // machine. A future polish pass surfaces "upload pending" status
+  // in the UI; today we log and move on.
+  const remote = getRemoteAssetStore();
+  if (remote) {
+    void remote
+      .upload(hash, bytes)
+      .catch((err) => console.warn('asset upload', hash, err));
+  }
   return hash;
+}
+
+/// Ensure an asset is in OPFS. Used on project load to pull down
+/// hashes that exist in the room's Y.Doc but never landed locally
+/// (e.g. peer B opens a room after peer A recorded into it).
+/// Returns true when the asset is available afterwards.
+export async function ensureLocal(hash: string): Promise<boolean> {
+  if (await has(hash)) return true;
+  const remote = getRemoteAssetStore();
+  if (!remote) return false;
+  try {
+    const bytes = await remote.download(hash);
+    if (!bytes) return false;
+    // Skip the upload-side-effect path in putBytes — the bytes
+    // came FROM the bucket, no need to round-trip.
+    const folder = await dir();
+    const handle = await folder.getFileHandle(`${hash}.bin`, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(bytes as unknown as FileSystemWriteChunkType);
+    await writable.close();
+    return true;
+  } catch (err) {
+    console.warn('asset download', hash, err);
+    return false;
+  }
 }
 
 export async function has(hash: string): Promise<boolean> {

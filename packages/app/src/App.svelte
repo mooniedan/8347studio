@@ -116,6 +116,10 @@
   } from './lib/sync';
   import { Awareness } from 'y-protocols/awareness';
   import { createCollabState, type CollabState } from './lib/collab.svelte';
+  import {
+    configureRemoteAssetStore,
+    clearRemoteAssetStore,
+  } from './lib/asset-storage-remote';
 
   // Phase-9 M5 — collab mode is opt-in via `?room=<id>`. main.ts
   // passes the id through; null/undefined means "local mode".
@@ -626,6 +630,9 @@
       awareness,
       onStatusChange: (s) => { syncStatus = s; },
     });
+    // Phase-9 M2 — turn on cloud asset upload/download so recordings
+    // and imports flow between peers.
+    configureRemoteAssetStore();
     activeRoomId = roomId;
   }
 
@@ -641,6 +648,7 @@
     syncAwareness = null;
     syncStatus = 'idle';
     activeRoomId = null;
+    clearRemoteAssetStore();
   }
 
   /// Generate a short, URL-safe room id. 8 chars from a 32-char
@@ -714,6 +722,7 @@
     syncAwareness?.destroy();
     syncAwareness = null;
     syncStatus = 'idle';
+    clearRemoteAssetStore();
     midi?.destroy();
     midi = null;
     bridge?.destroy();

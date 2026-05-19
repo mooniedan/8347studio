@@ -131,3 +131,22 @@ For the rare case where a peer is mid-drag on something you also
 want, the contention pill is enough today. A future polish pass
 may add per-object locks for heavy operations like audio-region
 trims.
+
+### Sharing recorded / imported audio (Phase 9 M2)
+
+Audio bytes are content-addressed: every recording or imported
+asset is keyed by its SHA-256 hash. When you join a room, every
+asset you create is uploaded to the room's bucket
+(`PUT /asset/<hash>`); when a peer's project references a hash
+you don't have locally, your client fetches it from the same
+bucket and caches it in OPFS.
+
+`pnpm dev:share` bundles a tiny in-memory bucket into the sync
+server, so LAN testing works out of the box. Production
+deployments swap the in-memory store for S3 / R2 / a real
+filesystem — same `/asset/<hash>` URL shape, same content-
+addressed semantics.
+
+Audio still renders locally on each peer (we never stream PCM
+between clients) — the bucket just guarantees both peers have the
+bytes to render from.

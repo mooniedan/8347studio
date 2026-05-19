@@ -534,6 +534,10 @@ export async function registerMissingAssets(project: Project): Promise<void> {
     const id = idForHash(hash);
     if (registeredAssetIds.has(id)) continue;
     try {
+      // Phase-9 M2 — pull from the cloud bucket when missing from
+      // OPFS. Quietly degrades to "no audio for this region" if no
+      // remote is configured or the hash isn't in the bucket.
+      await assetStore.ensureLocal(hash);
       const decoded = await assetStore.decode(hash, ctx);
       await audio.postRegisterAsset(id, decoded.pcm);
       registeredAssetIds.add(id);
