@@ -113,7 +113,11 @@ test.describe('phase-10 M3d — audio region inspector panel', () => {
   test('fade-in (ms) input writes fadeInSamples by sample rate', async ({ page }) => {
     const audioIdx = await setupRegion(page);
     await clickRegion(page, audioIdx, 0);
-    const sr = 48_000;
+    // Assets decode through the app's AudioContext, which runs at the
+    // OS-default rate (44.1k on macOS, 48k on CI). The inspector
+    // converts ms↔samples with the asset's stored rate, so read the
+    // real context rate instead of assuming a fixed 48k.
+    const sr = await page.evaluate(() => new AudioContext().sampleRate);
     const fadeMs = 100;
     const input = page.locator(`[data-testid="audio-region-inspector-${audioIdx}-fade-in"]`);
     await input.evaluate((el: HTMLInputElement, v) => {
@@ -130,7 +134,7 @@ test.describe('phase-10 M3d — audio region inspector panel', () => {
     const audioIdx = await setupRegion(page);
     await clickRegion(page, audioIdx, 0);
     const lengthSamples = (await readRegion(page, audioIdx, 0)).lengthSamples;
-    const sr = 48_000;
+    const sr = await page.evaluate(() => new AudioContext().sampleRate);
     const hugeMs = (lengthSamples / sr) * 1000 * 10; // 10× too big
     const input = page.locator(`[data-testid="audio-region-inspector-${audioIdx}-fade-out"]`);
     await input.evaluate((el: HTMLInputElement, v) => {
