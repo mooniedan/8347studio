@@ -21,10 +21,14 @@
   const {
     activeProjectId,
     onSwitch,
+    onImport,
   }: {
     activeProjectId: string | null;
     onSwitch: (id: string) => void;
+    onImport: (file: File) => void | Promise<void>;
   } = $props();
+
+  let importInput = $state<HTMLInputElement | null>(null);
 
   let open = $state(false);
   let trashOpen = $state(false);
@@ -68,6 +72,16 @@
     refresh();
     onSwitch(info.id);
     open = false;
+  }
+
+  async function handleImportChange(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ''; // allow re-importing the same file later
+    if (!file) return;
+    open = false;
+    await onImport(file);
+    refresh();
   }
 
   function handleNewDemo() {
@@ -163,6 +177,19 @@
     <div class="menu" data-testid="projects-menu-list">
       <button class="new" data-testid="projects-new" onclick={handleNew}>+ New project…</button>
       <button class="new demo" data-testid="projects-new-demo" onclick={handleNewDemo}>★ Demo Song</button>
+      <button
+        class="new import"
+        data-testid="projects-import"
+        onclick={() => importInput?.click()}
+      >⬆ Import bundle…</button>
+      <input
+        bind:this={importInput}
+        type="file"
+        accept=".zip,.8347.zip,application/zip"
+        data-testid="projects-import-input"
+        style="display:none"
+        onchange={(e) => void handleImportChange(e)}
+      />
       <ol>
         {#each active as p (p.id)}
           <li class="row" class:active={p.id === activeProjectId}>

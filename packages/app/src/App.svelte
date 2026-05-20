@@ -89,6 +89,7 @@
   import { createMidiInput, type MidiInputController } from './lib/midi-input';
   import { buildMidiHandler } from './lib/midi-routing';
   import * as assetStore from './lib/asset-store';
+  import { parseBundle } from './lib/bundle';
   import { enrichDemoSong } from './lib/demo-enrichment';
   import { attachWindowDebug } from './lib/debug-bridge';
   import {
@@ -596,6 +597,48 @@
     await reloadInstalledPlugins();
   }
 
+  /// Phase-10 M7c — import a `.8347.zip` bundle as a brand-new
+  /// project. Restores asset bytes into OPFS, then pre-seeds a fresh
+  /// IDB store with the bundle's Y.Doc state (same flush dance as
+  /// saveDemoAs so createProject's blank seed doesn't clobber it) and
+  /// switches to it.
+  async function importBundleAsProject(file: File): Promise<void> {
+    let parsed: ReturnType<typeof parseBundle>;
+    try {
+      parsed = parseBundle(new Uint8Array(await file.arrayBuffer()));
+    } catch (err) {
+      window.alert(`Could not read bundle: ${(err as Error).message}`);
+      return;
+    }
+    const { manifest, projectBytes, assets } = parsed;
+    // Restore asset bytes into OPFS first — putBytes re-hashes, so the
+    // stored hash matches the project's references; idempotent if an
+    // asset already exists locally.
+    for (const bytes of assets.values()) {
+      await assetStore.putBytes(bytes);
+    }
+    const fallback = file.name.replace(/\.8347\.zip$/i, '').replace(/\.zip$/i, '');
+    const name = (manifest?.name || fallback || 'Imported').trim();
+    const info = createProjectInfo(name);
+
+    await tearDownCurrent();
+    const doc = new Y.Doc();
+    const { IndexeddbPersistence } = await import('y-indexeddb');
+    const provider = new IndexeddbPersistence(info.docName, doc);
+    await provider.whenSynced;
+    Y.applyUpdate(doc, projectBytes);
+    await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+    provider.destroy();
+    doc.destroy();
+
+    setLastOpenedProject(info.id);
+    activeProjectId = info.id;
+    inDemo = false;
+    selectedTrackIdx = 0;
+    await bootProject(info.docName);
+    await reloadInstalledPlugins();
+  }
+
   // Phase-6 M5: tick-publishing loop. Runs while transport is on,
   // publishes the engine's current_tick at ~30 Hz over the
   // BroadcastChannel as awareness state — satellites (PIP, popups)
@@ -881,6 +924,7 @@
         <ProjectsMenu
           activeProjectId={activeProjectId}
           onSwitch={(id) => void switchProject(id)}
+          onImport={(file) => importBundleAsProject(file)}
         />
 
         {#key activeProjectId}
