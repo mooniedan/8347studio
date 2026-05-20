@@ -6,6 +6,7 @@ pub mod automation;
 pub mod clip_scheduler;
 pub mod engine;
 pub mod event;
+pub mod offline;
 pub mod oscillator;
 pub mod plugin;
 pub mod plugins;

@@ -9,6 +9,13 @@
     formatBytes,
     BUNDLE_EXT,
   } from './bundle';
+  import {
+    renderProjectToWav,
+    renderEndTick,
+    ticksToSeconds,
+    type RenderRange,
+  } from './render';
+  import type { BitDepth } from './wav';
 
   /**
    * Phase-10 M7 — Share & Export modal (P13).
@@ -47,7 +54,7 @@
   const TABS: { id: ShareTab; num: string; label: string; ready: boolean }[] = [
     { id: 'share', num: '01', label: 'Share live', ready: true },
     { id: 'export', num: '02', label: 'Export bundle', ready: true },
-    { id: 'render', num: '03', label: 'Render audio', ready: false },
+    { id: 'render', num: '03', label: 'Render audio', ready: true },
   ];
 
   let tab = $state<ShareTab>(initialTab);
@@ -121,6 +128,55 @@
       triggerDownload(name + BUNDLE_EXT, zip);
     } finally {
       exporting = false;
+    }
+  }
+
+  // ── Render audio tab (M7d) ───────────────────────────────────────
+  const SAMPLE_RATES = [
+    { v: '44100', label: '44.1 kHz · CD' },
+    { v: '48000', label: '48.0 kHz · session' },
+    { v: '88200', label: '88.2 kHz · 2×' },
+    { v: '96000', label: '96.0 kHz · HD' },
+    { v: '192000', label: '192 kHz · max' },
+  ];
+  const BIT_DEPTHS = [
+    { v: '16', label: '16-bit · int' },
+    { v: '24', label: '24-bit · int' },
+    { v: '32', label: '32-bit · float' },
+  ];
+  const TAIL_SECONDS = 2;
+
+  let renderFormat = $state<'WAV' | 'FLAC' | 'MP3'>('WAV');
+  let renderSampleRate = $state('48000');
+  let renderBitDepth = $state('24');
+  let renderRange = $state<RenderRange>('project');
+  let rendering = $state(false);
+
+  const renderTicks = $derived(renderEndTick(project, renderRange));
+  const renderSeconds = $derived(ticksToSeconds(project, renderTicks) + TAIL_SECONDS);
+  const renderSizeBytes = $derived(
+    Math.round(renderSeconds * Number(renderSampleRate) * 2 * (Number(renderBitDepth) / 8)),
+  );
+
+  function fmtDuration(sec: number): string {
+    const m = Math.floor(sec / 60);
+    const s = sec - m * 60;
+    return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
+  }
+
+  async function doRender() {
+    if (rendering) return;
+    rendering = true;
+    try {
+      const { wav } = await renderProjectToWav(project, {
+        sampleRate: Number(renderSampleRate),
+        bitDepth: Number(renderBitDepth) as BitDepth,
+        range: renderRange,
+        tailSeconds: TAIL_SECONDS,
+      });
+      triggerDownload(`${safeName()}.wav`, wav, 'audio/wav');
+    } finally {
+      rendering = false;
     }
   }
 
@@ -292,6 +348,74 @@
               <span class="v mono">deflate</span>
             </div>
           </div>
+        {:else if tab === 'render'}
+          <div class="field">
+            <div class="lbl">FORMAT</div>
+            <div class="chips">
+              {#each (['WAV', 'FLAC', 'MP3'] as const) as f (f)}
+                <button
+                  type="button"
+                  class="chip"
+                  class:on={renderFormat === f}
+                  disabled={f !== 'WAV'}
+                  title={f === 'WAV' ? undefined : 'Coming soon'}
+                  data-testid={`share-render-format-${f}`}
+                  onclick={() => { if (f === 'WAV') renderFormat = f; }}
+                >
+                  <span class="chip-nm">{f}</span>
+                  <span class="chip-desc">
+                    {f === 'WAV' ? 'lossless · uncompressed' : 'soon'}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <div class="lbl">SAMPLE RATE</div>
+              <select class="select mono" data-testid="share-render-samplerate" bind:value={renderSampleRate}>
+                {#each SAMPLE_RATES as sr (sr.v)}
+                  <option value={sr.v}>{sr.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="field">
+              <div class="lbl">BIT DEPTH</div>
+              <select class="select mono" data-testid="share-render-bitdepth" bind:value={renderBitDepth}>
+                {#each BIT_DEPTHS as bd (bd.v)}
+                  <option value={bd.v}>{bd.label}</option>
+                {/each}
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="lbl">RENDER RANGE</div>
+            <div class="seg-range">
+              <button
+                type="button"
+                class:on={renderRange === 'loop'}
+                data-testid="share-render-range-loop"
+                onclick={() => { renderRange = 'loop'; }}
+              >Loop region</button>
+              <button
+                type="button"
+                class:on={renderRange === 'project'}
+                data-testid="share-render-range-project"
+                onclick={() => { renderRange = 'project'; }}
+              >Entire project</button>
+            </div>
+          </div>
+
+          <div class="bytes-block mono" data-testid="share-render-dryrun">
+            <div>$ 8347 render --format=wav --sr={renderSampleRate} --bits={renderBitDepth} --range={renderRange}</div>
+            <div>&gt; dry run: <span class="ok">ok</span> · expected
+              <span class="hl" data-testid="share-render-estimate">{fmtDuration(renderSeconds)}</span>
+              · output <span class="hl">{formatBytes(renderSizeBytes)}</span>
+            </div>
+            <div class="note">WASM-plugin inserts are not included in offline renders.</div>
+          </div>
         {/if}
       </section>
 
@@ -310,6 +434,10 @@
             <span class="k">OUTPUT</span>
             <span class="v">{safeName()}{BUNDLE_EXT}</span>
             · {estimate ? formatBytes(estimate.bytes) : '…'}
+          {:else if tab === 'render'}
+            <span class="k">OUTPUT</span>
+            <span class="v">{safeName()}.wav</span>
+            · {fmtDuration(renderSeconds)}
           {/if}
         </div>
         <div class="actions">
@@ -339,6 +467,16 @@
               disabled={exporting}
               onclick={doExport}
             >⬇ {exporting ? 'Exporting…' : 'Export bundle'}</Button>
+          {:else if tab === 'render'}
+            <Button variant="ghost" testId="share-render-cancel" onclick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              testId="share-render-run"
+              disabled={rendering}
+              onclick={doRender}
+            >● {rendering ? 'Rendering…' : 'Render'}</Button>
           {/if}
         </div>
       </footer>
@@ -636,6 +774,82 @@
     text-transform: uppercase;
   }
   .readout .v { color: var(--fg-0); font-size: var(--text-14); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+  .select {
+    appearance: none;
+    background: var(--bg-0);
+    color: var(--fg-0);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    font-size: var(--text-11);
+    box-shadow: var(--shadow-inset);
+    width: 100%;
+  }
+  .select:focus { outline: none; border-color: var(--accent); }
+
+  .chips { display: flex; gap: var(--sp-3); }
+  .chip {
+    appearance: none;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    background: var(--bg-2);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    cursor: pointer;
+    text-align: left;
+  }
+  .chip-nm { font-family: var(--font-mono); color: var(--fg-0); font-weight: 600; }
+  .chip-desc { font-size: var(--text-10); color: var(--fg-3); }
+  .chip:hover:not(:disabled) { border-color: var(--line-2); }
+  .chip:disabled { opacity: 0.4; cursor: not-allowed; }
+  .chip.on {
+    border-color: var(--accent);
+    background: var(--accent-tint);
+  }
+  .chip.on .chip-nm { color: var(--accent-hi); }
+
+  .seg-range {
+    display: flex;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    box-shadow: var(--shadow-inset);
+  }
+  .seg-range button {
+    flex: 1;
+    appearance: none;
+    background: var(--bg-0);
+    color: var(--fg-2);
+    border: none;
+    border-right: 1px solid var(--line-1);
+    padding: var(--sp-3);
+    cursor: pointer;
+    font-size: var(--text-11);
+  }
+  .seg-range button:last-child { border-right: none; }
+  .seg-range button:hover { color: var(--fg-0); }
+  .seg-range button.on {
+    background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+    color: var(--fg-0);
+  }
+
+  .bytes-block {
+    background: var(--bg-0);
+    border: 1px solid var(--line-0);
+    border-radius: var(--r-sm);
+    padding: var(--sp-4);
+    font-size: var(--text-10);
+    color: var(--fg-2);
+    line-height: 1.6;
+  }
+  .bytes-block .ok { color: var(--meter-ok); }
+  .bytes-block .hl { color: var(--fg-0); }
+  .bytes-block .note { color: var(--fg-3); margin-top: var(--sp-2); }
 
   .foot {
     display: flex;

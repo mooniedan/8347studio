@@ -500,6 +500,42 @@ export async function registerMissingAssets(project: Project): Promise<void> {
   }
 }
 
+/// Phase-10 M7d — gather the decoded PCM for every asset the project
+/// references, keyed by the same engine asset-id `buildSnapshot` uses.
+/// The offline render worker replays these into its own engine
+/// instance before rendering. `registerMissingAssets` runs first so
+/// the hash→id map + decode cache are populated; decode() then hits
+/// the cache.
+export interface RenderAsset {
+  id: number;
+  pcm: Float32Array;
+}
+
+export async function collectRenderAssets(project: Project): Promise<RenderAsset[]> {
+  const seen = new Set<string>();
+  for (const trackId of project.tracks.toArray()) {
+    const track = project.trackById.get(trackId);
+    const arr = track?.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined;
+    arr?.forEach((r) => {
+      const hash = r.get('assetHash') as string | undefined;
+      if (hash) seen.add(hash);
+    });
+  }
+  if (seen.size === 0) return [];
+  await registerMissingAssets(project);
+  const ctx = await audio.audioContext();
+  const out: RenderAsset[] = [];
+  for (const hash of seen) {
+    try {
+      const decoded = await assetStore.decode(hash, ctx);
+      out.push({ id: idForHash(hash), pcm: decoded.pcm });
+    } catch {
+      /* asset unavailable — engine skips its region, same as realtime */
+    }
+  }
+  return out;
+}
+
 function extractAudioRegions(track: Y.Map<unknown>): AudioRegionSnapshot[] {
   const arr = track.get('audioRegions') as Y.Array<Y.Map<unknown>> | undefined;
   if (!arr) return [];

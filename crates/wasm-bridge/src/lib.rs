@@ -167,6 +167,38 @@ pub extern "C" fn process(ptr: *mut f32, len: usize) {
     }
 }
 
+/// Phase-10 M7d — offline render scratch. Holds the most-recent
+/// `offline_render` output (interleaved stereo) until the next render
+/// or instance teardown; the render worker reads it via
+/// `render_buffer_ptr` then discards the whole wasm instance.
+static mut RENDER_BUF: Option<Vec<f32>> = None;
+
+/// Render from the engine's current position to `end_tick` (capped at
+/// `max_frames` stereo frames). Returns the number of stereo frames
+/// produced; the PCM lives in the render scratch, read via
+/// `render_buffer_ptr` (length = returned frames × 2).
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn offline_render(end_tick: f64, max_frames: usize) -> usize {
+    unsafe {
+        let pcm = audio_engine::offline::render_until_tick(engine(), end_tick, max_frames);
+        let frames = pcm.len() / 2;
+        RENDER_BUF = Some(pcm);
+        frames
+    }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn render_buffer_ptr() -> *const f32 {
+    unsafe {
+        RENDER_BUF
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null())
+    }
+}
+
 // ---- Legacy single-track exports (Phase-0/1 UI back-compat) -----------
 //
 // M5 deletes these in favour of structural rebuilds. Until then, they
