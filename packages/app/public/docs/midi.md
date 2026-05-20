@@ -4,7 +4,8 @@
 
 ## Connecting a controller
 
-1. Click **Enable MIDI** in the top bar.
+1. Click **Enable MIDI** in the top bar — or open **Settings (⚙)**
+   and click **Enable MIDI** there.
 2. The browser prompts for WebMIDI permission. Grant it.
 3. The MIDI chip appears with the device list. Pick:
    - **All devices** (default) — every connected controller routes
@@ -14,6 +15,22 @@
 Hardware **NoteOn / NoteOff** routes to the **armed** track (the
 filled red dot on the rail). If nothing's armed, MIDI follows the
 **selected** track instead.
+
+## Settings panel (Phase 10 M6)
+
+The **⚙** button in the top bar opens a Settings modal with a
+MIDI tab containing three sections:
+
+- **Devices** — Web MIDI status (idle / requesting / granted /
+  denied / unsupported), the active-input selector when granted,
+  and an **Enable MIDI** button when permission is still pending.
+- **Controller map** — the **MIDI Learn** toggle (mirror of the
+  top-bar button) plus a per-binding list. Each row reads
+  `CC<n> → <track name> · param <id>` with a ✕ to unbind.
+- **Empty state** — a callout that points at MIDI Learn appears
+  whenever the project has zero bindings.
+
+Press **Esc** or click the backdrop to close.
 
 ## MIDI Learn
 

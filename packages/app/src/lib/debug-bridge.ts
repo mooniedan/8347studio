@@ -39,6 +39,10 @@ import {
   type AudioRegionPatch,
   getLoopRegion,
   getMidiBinding,
+  setMidiBinding,
+  removeMidiBinding,
+  listMidiBindings,
+  type MidiBinding,
   getPianoRollClipForTrack,
   getStepSeqClipForTrack,
   getTrackColor,
@@ -237,6 +241,12 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
     /// binding without poking at the Y.Doc directly.
     getMidiBinding: (cc: number) =>
       withProject(deps, (p) => getMidiBinding(p, cc), null),
+    setMidiBinding: (cc: number, binding: MidiBinding) =>
+      withProject(deps, (p) => { setMidiBinding(p, cc, binding); return true; }, false),
+    removeMidiBinding: (cc: number) =>
+      withProject(deps, (p) => { removeMidiBinding(p, cc); return true; }, false),
+    listMidiBindings: () =>
+      withProject(deps, (p) => listMidiBindings(p), [] as ReturnType<typeof listMidiBindings>),
     /// Phase-8 M1 — pure manifest validator. Safe to expose.
     parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
     /// Phase-8 M5b — inject a manifest into `meta.installedPlugins`

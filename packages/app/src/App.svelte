@@ -10,6 +10,7 @@
   import SendList from './lib/SendList.svelte';
   import AudioTrackView from './lib/AudioTrackView.svelte';
   import AutomationLanes from './lib/AutomationLanes.svelte';
+  import SettingsPanel from './lib/SettingsPanel.svelte';
   import ProjectsMenu from './lib/ProjectsMenu.svelte';
   import Inspector from './lib/Inspector.svelte';
   import MixerDrawer from './lib/MixerDrawer.svelte';
@@ -758,6 +759,15 @@
     if (!learnActive) learnPendingCC = null;
   }
 
+  // Phase-10 M6 — Settings modal.
+  let settingsOpen = $state(false);
+  function openSettings() { settingsOpen = true; }
+  function closeSettings() { settingsOpen = false; }
+  function selectMidiDeviceById(id: string | null) {
+    if (!midi) return;
+    midi.selectedDeviceId = id;
+  }
+
   function bindPendingCC(paramId: number) {
     if (!project || learnPendingCC == null) return;
     const trackIdx = selectedTrackIdx;
@@ -1023,6 +1033,14 @@
           title="Open the user guide{pipSupported ? ' in a Picture-in-Picture window' : ' in a new tab'}"
           aria-label="Open user guide"
         >?</button>
+
+        <button
+          class="tb"
+          data-testid="open-settings"
+          onclick={openSettings}
+          title="Open settings (MIDI devices, bindings, …)"
+          aria-label="Open settings"
+        >⚙</button>
       </header>
 
       <!-- LEFT RAIL: track list. -->
@@ -1198,6 +1216,21 @@
         selectedTrackName={selectedTrackNameValue || 'track'}
         onInstall={installPluginFromUrl}
         onAddToTrack={addInstalledPluginToSelectedTrack}
+      />
+
+      <!-- Phase 10 M6 — Settings modal (currently MIDI tab only). -->
+      <SettingsPanel
+        {project}
+        open={settingsOpen}
+        midiStatus={midiStatus}
+        midiDevices={midiDevices}
+        selectedMidiId={selectedMidiId}
+        learnActive={learnActive}
+        learnPendingCC={learnPendingCC}
+        onEnableMidi={() => void enableMidi()}
+        onSelectMidiDevice={selectMidiDeviceById}
+        onToggleLearn={toggleLearn}
+        onClose={closeSettings}
       />
     </div>
   {/if}
