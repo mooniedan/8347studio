@@ -2,6 +2,13 @@
   import { getTrackName, type Project } from './project';
   import type { CollabSession } from './collab-session.svelte';
   import { Button } from './ui';
+  import {
+    buildBundle,
+    estimateBundle,
+    triggerDownload,
+    formatBytes,
+    BUNDLE_EXT,
+  } from './bundle';
 
   /**
    * Phase-10 M7 — Share & Export modal (P13).
@@ -39,7 +46,7 @@
 
   const TABS: { id: ShareTab; num: string; label: string; ready: boolean }[] = [
     { id: 'share', num: '01', label: 'Share live', ready: true },
-    { id: 'export', num: '02', label: 'Export bundle', ready: false },
+    { id: 'export', num: '02', label: 'Export bundle', ready: true },
     { id: 'render', num: '03', label: 'Render audio', ready: false },
   ];
 
@@ -79,6 +86,42 @@
   function peerTrackLabel(idx: number | undefined): string {
     if (idx == null) return 'viewing';
     return getTrackName(project, idx) ?? `track ${idx + 1}`;
+  }
+
+  // ── Export bundle tab (M7b) ──────────────────────────────────────
+  let exportName = $state('project');
+  let includeAudio = $state(true);
+  let estimate = $state<{ bytes: number; assetCount: number } | null>(null);
+  let exporting = $state(false);
+
+  // Recompute the size estimate whenever the export tab is visible and
+  // its inputs change. Guarded so a slow OPFS read can't clobber a
+  // newer estimate.
+  $effect(() => {
+    if (!open || tab !== 'export') return;
+    const wantAudio = includeAudio;
+    let stale = false;
+    estimate = null;
+    void estimateBundle(project, wantAudio).then((e) => {
+      if (!stale) estimate = e;
+    });
+    return () => { stale = true; };
+  });
+
+  function safeName(): string {
+    return (exportName.trim() || 'project').replace(/[^\w.-]+/g, '_');
+  }
+
+  async function doExport() {
+    if (exporting) return;
+    exporting = true;
+    try {
+      const name = safeName();
+      const { zip } = await buildBundle(project, name, includeAudio);
+      triggerDownload(name + BUNDLE_EXT, zip);
+    } finally {
+      exporting = false;
+    }
   }
 
   function onBackdropClick(e: MouseEvent) {
@@ -198,35 +241,104 @@
               and edits.
             </div>
           {/if}
+        {:else if tab === 'export'}
+          <div class="field">
+            <div class="lbl">
+              FILENAME
+              <span class="hint">project + assets bundled into one archive</span>
+            </div>
+            <div class="input-row">
+              <input
+                class="text-input mono"
+                data-testid="share-export-filename"
+                value={exportName}
+                oninput={(e) => { exportName = (e.currentTarget as HTMLInputElement).value; }}
+              />
+              <span class="ext mono">{BUNDLE_EXT}</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="lbl">CONTENTS</div>
+            <button
+              type="button"
+              class="toggle"
+              class:on={includeAudio}
+              data-testid="share-export-include-audio"
+              aria-pressed={includeAudio}
+              onclick={() => { includeAudio = !includeAudio; }}
+            >
+              <span class="sw"></span>
+              <span class="toggle-lbl">
+                Include audio assets
+                <span class="hint">source clips stored in OPFS</span>
+              </span>
+            </button>
+          </div>
+
+          <div class="readout">
+            <div class="col">
+              <span class="k">Estimated size</span>
+              <span class="v mono" data-testid="share-export-estimate">
+                {estimate ? formatBytes(estimate.bytes) : '…'}
+              </span>
+            </div>
+            <div class="col">
+              <span class="k">Audio clips</span>
+              <span class="v mono">{includeAudio ? (estimate?.assetCount ?? '…') : 0}</span>
+            </div>
+            <div class="col">
+              <span class="k">Compression</span>
+              <span class="v mono">deflate</span>
+            </div>
+          </div>
         {/if}
       </section>
 
       <footer class="foot">
         <div class="summary mono">
-          {#if inSession}
-            <span class="k">SESSION</span>
-            <span class="v">{session.activeRoomId}</span>
-            · {peers.length + 1} connected
-          {:else}
-            <span class="k">LOCAL</span>
-            <span class="v">no session</span>
+          {#if tab === 'share'}
+            {#if inSession}
+              <span class="k">SESSION</span>
+              <span class="v">{session.activeRoomId}</span>
+              · {peers.length + 1} connected
+            {:else}
+              <span class="k">LOCAL</span>
+              <span class="v">no session</span>
+            {/if}
+          {:else if tab === 'export'}
+            <span class="k">OUTPUT</span>
+            <span class="v">{safeName()}{BUNDLE_EXT}</span>
+            · {estimate ? formatBytes(estimate.bytes) : '…'}
           {/if}
         </div>
         <div class="actions">
-          {#if inSession}
-            <Button variant="ghost" testId="share-end-session" onclick={onEndSession}>
-              End session
-            </Button>
-            <Button variant="primary" testId="share-done" onclick={onClose}>
-              ✓ Done
-            </Button>
-          {:else}
-            <Button variant="ghost" testId="share-cancel" onclick={onClose}>
+          {#if tab === 'share'}
+            {#if inSession}
+              <Button variant="ghost" testId="share-end-session" onclick={onEndSession}>
+                End session
+              </Button>
+              <Button variant="primary" testId="share-done" onclick={onClose}>
+                ✓ Done
+              </Button>
+            {:else}
+              <Button variant="ghost" testId="share-cancel" onclick={onClose}>
+                Cancel
+              </Button>
+              <Button variant="primary" testId="share-start-session" onclick={onStartSession}>
+                ⤴ Start session
+              </Button>
+            {/if}
+          {:else if tab === 'export'}
+            <Button variant="ghost" testId="share-export-cancel" onclick={onClose}>
               Cancel
             </Button>
-            <Button variant="primary" testId="share-start-session" onclick={onStartSession}>
-              ⤴ Start session
-            </Button>
+            <Button
+              variant="primary"
+              testId="share-export-run"
+              disabled={exporting}
+              onclick={doExport}
+            >⬇ {exporting ? 'Exporting…' : 'Export bundle'}</Button>
           {/if}
         </div>
       </footer>
@@ -440,6 +552,90 @@
     padding: var(--sp-5);
     text-align: center;
   }
+
+  .input-row {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-sm);
+    background: var(--bg-0);
+    box-shadow: var(--shadow-inset);
+    overflow: hidden;
+  }
+  .text-input {
+    flex: 1;
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--fg-0);
+    padding: var(--sp-3);
+    font-size: var(--text-12);
+  }
+  .text-input:focus { outline: none; }
+  .input-row:focus-within { border-color: var(--accent); }
+  .ext {
+    display: flex;
+    align-items: center;
+    padding: 0 var(--sp-3);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    border-left: 1px solid var(--line-1);
+    font-size: var(--text-11);
+  }
+
+  .toggle {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-3);
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .toggle .sw {
+    width: 32px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--bg-3);
+    border: 1px solid var(--line-2);
+    position: relative;
+    transition: background 0.12s;
+    flex: none;
+  }
+  .toggle .sw::after {
+    content: '';
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--fg-2);
+    transition: transform 0.12s, background 0.12s;
+  }
+  .toggle.on .sw { background: var(--accent-tint); border-color: var(--accent-lo); }
+  .toggle.on .sw::after { transform: translateX(14px); background: var(--accent-hi); }
+  .toggle-lbl { color: var(--fg-1); display: flex; flex-direction: column; }
+  .toggle-lbl .hint { color: var(--fg-3); font-size: var(--text-10); }
+
+  .readout {
+    display: flex;
+    gap: var(--sp-6);
+    padding: var(--sp-4);
+    background: var(--bg-0);
+    border: 1px solid var(--line-0);
+    border-radius: var(--r-sm);
+  }
+  .readout .col { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .readout .k {
+    font-size: var(--text-10);
+    color: var(--fg-3);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .readout .v { color: var(--fg-0); font-size: var(--text-14); }
 
   .foot {
     display: flex;

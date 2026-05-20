@@ -54,11 +54,11 @@ test.describe('phase-10 M7a — Share & Export modal', () => {
     await expect(page.locator('[data-testid="share-export-modal"]')).toHaveCount(0);
   });
 
-  test('export and render tabs are disabled until their milestones land', async ({ page }) => {
+  test('render tab is disabled until M7d lands; export is enabled', async ({ page }) => {
     await page.goto('/');
     await bridgeReady(page);
     await page.click('[data-testid="share-button"]');
-    await expect(page.locator('[data-testid="share-tab-export"]')).toBeDisabled();
+    await expect(page.locator('[data-testid="share-tab-export"]')).toBeEnabled();
     await expect(page.locator('[data-testid="share-tab-render"]')).toBeDisabled();
   });
 
