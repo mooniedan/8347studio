@@ -11,6 +11,8 @@
   import AudioTrackView from './lib/AudioTrackView.svelte';
   import AutomationLanes from './lib/AutomationLanes.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
+  import ShareExportModal from './lib/ShareExportModal.svelte';
+  type ShareTab = 'share' | 'export' | 'render';
   import ProjectsMenu from './lib/ProjectsMenu.svelte';
   import Inspector from './lib/Inspector.svelte';
   import MixerDrawer from './lib/MixerDrawer.svelte';
@@ -768,6 +770,17 @@
     midi.selectedDeviceId = id;
   }
 
+  // Phase-10 M7 — Share & Export modal.
+  let shareOpen = $state(false);
+  let shareInitialTab = $state<ShareTab>('share');
+  function openShare(tab: ShareTab = 'share') {
+    shareInitialTab = tab;
+    shareOpen = true;
+  }
+  function closeShare() { shareOpen = false; }
+  function startCollabSession() { void session.share(project, selectedTrackIdx); }
+  function endCollabSession() { session.detach(); }
+
   function bindPendingCC(paramId: number) {
     if (!project || learnPendingCC == null) return;
     const trackIdx = selectedTrackIdx;
@@ -1008,10 +1021,10 @@
           class="tb share"
           class:connected={session.activeRoomId != null}
           data-testid="share-button"
-          onclick={() => void session.share(project, selectedTrackIdx)}
+          onclick={() => openShare('share')}
           title={session.activeRoomId
-            ? `Copy room link (status: ${session.syncStatus})`
-            : 'Start a collab session and copy the room link'}
+            ? `Manage collab session (status: ${session.syncStatus})`
+            : 'Open Share & Export'}
           aria-label="Share collab session"
         >{session.activeRoomId ? `⤴ ${session.syncStatus}` : '⤴ Share'}</button>
 
@@ -1231,6 +1244,18 @@
         onSelectMidiDevice={selectMidiDeviceById}
         onToggleLearn={toggleLearn}
         onClose={closeSettings}
+      />
+
+      <!-- Phase 10 M7 — Share & Export modal. -->
+      <ShareExportModal
+        {project}
+        {session}
+        open={shareOpen}
+        initialTab={shareInitialTab}
+        selectedTrackIdx={selectedTrackIdx}
+        onStartSession={startCollabSession}
+        onEndSession={endCollabSession}
+        onClose={closeShare}
       />
     </div>
   {/if}
