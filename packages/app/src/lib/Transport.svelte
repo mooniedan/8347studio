@@ -24,7 +24,8 @@
   const {
     project,
     collab = null,
-  }: { project: Project; collab?: CollabState | null } = $props();
+    canEdit = true,
+  }: { project: Project; collab?: CollabState | null; canEdit?: boolean } = $props();
 
   const TICKS_PER_BAR = STEPS_PER_CLIP * STEP_TICKS;
 
@@ -236,6 +237,7 @@
       type="checkbox"
       checked={loopEnabled}
       oninput={onLoopToggle}
+      disabled={!canEdit}
       data-testid="loop-toggle"
     />
     loop
@@ -248,7 +250,7 @@
       max="999"
       value={loopStartBar}
       oninput={onLoopStartInput}
-      disabled={!loopEnabled}
+      disabled={!loopEnabled || !canEdit}
       data-testid="loop-start-bar"
     />
     –
@@ -258,7 +260,7 @@
       max="999"
       value={loopEndBar}
       oninput={onLoopEndInput}
-      disabled={!loopEnabled}
+      disabled={!loopEnabled || !canEdit}
       data-testid="loop-end-bar"
     />
   </label>
@@ -270,6 +272,7 @@
       max="300"
       value={bpm}
       oninput={onBpmInput}
+      disabled={!canEdit}
       data-testid="bpm-input"
       class="bpm-input num"
       onpointerdown={onBpmPointerDown}

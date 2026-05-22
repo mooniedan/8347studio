@@ -77,6 +77,7 @@
     setSynthParam,
     seedDefaults,
     claimProjectOwner,
+    canEditProject,
     PPQ,
     STEP_TICKS,
     type Project,
@@ -863,6 +864,21 @@
   }
   function endCollabSession() { session.detach(); }
 
+  // Phase-11 M2 — client-side edit lock. `canEdit` is true outside a
+  // room (local mode) and, inside a room, only for the owner + granted
+  // editors. Recomputed when the room changes or meta.collab updates.
+  // Soft tier: gates the UI; server enforcement is deferred.
+  let canEdit = $state(true);
+  $effect(() => {
+    const p = project;
+    const inRoom = session.activeRoomId != null;
+    if (!p || !inRoom) { canEdit = true; return; }
+    const compute = () => { canEdit = canEditProject(p, session.user.id); };
+    compute();
+    p.meta.observe(compute);
+    return () => p.meta.unobserve(compute);
+  });
+
   // Synced project name for the menu trigger when in a room. The
   // joiner has no registry entry for the shared project, so it reads
   // the name from the synced Y.Doc meta (set by the host on share).
@@ -982,7 +998,7 @@
         />
 
         {#key projectViewKey}
-          <div class="transport-host"><Transport {project} collab={session.collab} /></div>
+          <div class="transport-host"><Transport {project} collab={session.collab} canEdit={canEdit} /></div>
         {/key}
 
         <MasterMeter />
@@ -992,6 +1008,7 @@
         <button
           class="tb"
           data-testid="add-synth-track"
+          disabled={!canEdit}
           onclick={() => {
             if (!project) return;
             addSubtractiveTrack(project);
@@ -1001,6 +1018,7 @@
         <button
           class="tb"
           data-testid="add-drumkit-track"
+          disabled={!canEdit}
           onclick={() => {
             if (!project) return;
             addDrumkitTrack(project);
@@ -1010,6 +1028,7 @@
         <button
           class="tb"
           data-testid="add-bus-track"
+          disabled={!canEdit}
           onclick={() => {
             if (!project) return;
             addBusTrack(project);
@@ -1019,6 +1038,7 @@
         <button
           class="tb"
           data-testid="add-audio-track"
+          disabled={!canEdit}
           onclick={() => {
             if (!project) return;
             addAudioTrack(project);
@@ -1029,6 +1049,7 @@
         <button
           class="tb"
           data-testid="open-plugin-picker"
+          disabled={!canEdit}
           onclick={() => (pickerOpen = true)}
           title="Browse + install third-party plugins"
         >+ Plugin</button>
@@ -1037,6 +1058,7 @@
           class="tb record"
           class:recording
           data-testid="record"
+          disabled={!canEdit}
           onclick={toggleRecord}
           aria-pressed={recording}
           title="Record live MIDI into the armed track's piano-roll clip"
@@ -1049,6 +1071,7 @@
           class="tb learn"
           class:active={learnActive}
           data-testid="midi-learn-toggle"
+          disabled={!canEdit}
           onclick={toggleLearn}
           aria-pressed={learnActive}
           title="Bind hardware CCs to plugin parameters"
@@ -1162,13 +1185,20 @@
             selectedIdx={selectedTrackIdx}
             onSelect={(i) => (selectedTrackIdx = i)}
             collab={session.collab}
+            canEdit={canEdit}
           />
         {/key}
       </aside>
 
       <!-- MAIN CANVAS: the per-track editor (Sequencer / PianoRoll /
            AudioTrackView, plus insert + send rows). -->
-      <main class="canvas" data-testid="canvas">
+      <main class="canvas" class:readonly={!canEdit} data-testid="canvas">
+        {#if session.activeRoomId && !canEdit}
+          <div class="viewonly-banner" data-testid="viewonly-banner" role="status">
+            <span class="vo-tag">VIEW ONLY</span>
+            <span class="vo-msg">The owner hasn't granted you editing — you can play and follow along.</span>
+          </div>
+        {/if}
         <header class="canvas-head" data-testid="canvas-head">
           <span
             class="track-stripe"
@@ -1301,6 +1331,7 @@
         {#key projectViewKey}
           <Mixer
             {project}
+            canEdit={canEdit}
             onPopout={() => {
               // If a popup is already open, just focus it instead of
               // opening a second copy.
@@ -1619,6 +1650,32 @@
     font-weight: 600;
   }
   .demo-msg { color: var(--fg-1); }
+
+  /* Phase-11 M2 — collab read-only mode. The canvas (all per-track
+     editors) goes non-interactive for a viewer; the banner explains
+     why. Track selection (rail) + transport play stay live. */
+  .canvas.readonly { pointer-events: none; }
+  .canvas.readonly .viewonly-banner { pointer-events: auto; }
+  .viewonly-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4);
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--line-2);
+    color: var(--fg-1);
+    font-size: var(--text-11);
+    flex-shrink: 0;
+    pointer-events: auto;
+  }
+  .vo-tag {
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    color: var(--solo);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .vo-msg { color: var(--fg-2); }
   .save-as,
   .save-go,
   .save-cancel {

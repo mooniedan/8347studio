@@ -201,4 +201,41 @@ collabTest.describe('phase-9 M5 — share & join', () => {
       await ctxA.close();
     }
   });
+
+  // Phase-11 M2 — a viewer is read-only: "View only" banner + editing
+  // controls disabled. The owner edits freely.
+  collabTest('a collab viewer is read-only; the owner can edit', async ({ browser, syncBase }) => {
+    collabTest.setTimeout(30_000);
+    const { ctx: ctxA, page: a } = await makeContext(browser);
+    try {
+      await a.goto(`/?syncBase=${encodeURIComponent(syncBase)}`);
+      await bridgeReady(a);
+      await a.click('[data-testid="share-button"]');
+      await a.click('[data-testid="share-start-session"]');
+      await expect
+        .poll(() => a.evaluate(() => (window as any).__bridge.collabPermissions().ownerId))
+        .not.toBeNull();
+      await a.click('[data-testid="share-export-close"]');
+      // Owner: no view-only banner; editing enabled.
+      await expect(a.locator('[data-testid="viewonly-banner"]')).toHaveCount(0);
+      await expect(a.locator('[data-testid="add-synth-track"]')).toBeEnabled();
+      const roomId = await a.evaluate(() => new URLSearchParams(location.search).get('room'));
+
+      const { ctx: ctxB, page: b } = await makeContext(browser);
+      try {
+        await b.goto(`/?room=${roomId}&syncBase=${encodeURIComponent(syncBase)}`);
+        await bridgeReady(b);
+        // Viewer: banner shown, structural + tempo controls disabled.
+        await expect(b.locator('[data-testid="viewonly-banner"]')).toBeVisible();
+        await expect(b.locator('[data-testid="add-synth-track"]')).toBeDisabled();
+        await expect(b.locator('[data-testid="add-track"]')).toBeDisabled();
+        await expect(b.locator('[data-testid="bpm-input"]')).toBeDisabled();
+        await expect(b.locator('[data-testid="canvas"]')).toHaveClass(/readonly/);
+      } finally {
+        await ctxB.close();
+      }
+    } finally {
+      await ctxA.close();
+    }
+  });
 });

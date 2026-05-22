@@ -25,6 +25,7 @@
     project,
     audioEnabled = true,
     onPopout,
+    canEdit = true,
   }: {
     project: Project;
     /// Set false in satellite popups (no audio engine in those windows).
@@ -32,6 +33,9 @@
     /// Optional pop-out hook — when wired, the mixer renders a "Pop
     /// out" button that opens a satellite window.
     onPopout?: () => void;
+    /// Phase-11 M2 — false for a collab viewer: the mixer goes
+    /// read-only (faders/mute/solo non-interactive).
+    canEdit?: boolean;
   } = $props();
 
   type Strip = {
@@ -142,7 +146,7 @@
   });
 </script>
 
-<div class="mixer" data-testid="mixer">
+<div class="mixer" class:readonly={!canEdit} data-testid="mixer">
   {#if onPopout}
     <button
       class="popout"
@@ -298,6 +302,9 @@
     min-height: 100%;
     font-family: var(--font-sans);
   }
+  /* Phase-11 M2 — collab viewer: faders/mute/solo non-interactive. */
+  .mixer.readonly { pointer-events: none; }
+  .mixer.readonly .pop { pointer-events: auto; }
   .popout {
     align-self: flex-start;
     background: transparent;

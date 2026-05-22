@@ -17,6 +17,7 @@
     selectedIdx,
     onSelect,
     collab = null,
+    canEdit = true,
   }: {
     project: Project;
     selectedIdx: number;
@@ -24,6 +25,9 @@
     /// Phase-9 M4 — when set, render ghost rings on tracks remote
     /// peers have selected. Each peer paints in their own color.
     collab?: CollabState | null;
+    /// Phase-11 M2 — false for a collab viewer: structural edits
+    /// (add / delete / arm) are disabled; selection stays enabled.
+    canEdit?: boolean;
   } = $props();
 
   // Reactive derivation — for each row, the list of peers whose
@@ -122,6 +126,7 @@
       <button
         class="arm"
         class:armed={armedId === t.id}
+        disabled={!canEdit}
         onclick={(e) => { e.stopPropagation(); toggleArm(t.id); }}
         data-testid={`track-arm-${i}`}
         aria-label={`arm ${t.name}`}
@@ -130,6 +135,7 @@
       {#if tracks.length > 1}
         <button
           class="del"
+          disabled={!canEdit}
           onclick={(e) => { e.stopPropagation(); remove(i); }}
           data-testid={`track-delete-${i}`}
           aria-label={`delete ${t.name}`}
@@ -137,7 +143,7 @@
       {/if}
     </div>
   {/each}
-  <button class="add" onclick={add} data-testid="add-track">+ Track</button>
+  <button class="add" disabled={!canEdit} onclick={add} data-testid="add-track">+ Track</button>
 </div>
 
 <style>
