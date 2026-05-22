@@ -116,4 +116,43 @@ collabTest.describe('phase-9 M5 — share & join', () => {
       await ctxB.close();
     }
   });
+
+  // Phase-10 polish — the project-name dropdown reflects the SHARED
+  // project on both devices. The name lives in the per-machine
+  // registry (never synced), so the host copies it into the synced
+  // Y.Doc meta on share; both triggers then show "🔗 <name>".
+  collabTest('shared session shows the same project name on both devices', async ({ browser, syncBase }) => {
+    collabTest.setTimeout(30_000);
+    const { ctx: ctxA, page: a } = await makeContext(browser);
+    try {
+      // A opens locally (no room), then starts a session.
+      await a.goto(`/?syncBase=${encodeURIComponent(syncBase)}`);
+      await bridgeReady(a);
+      await a.click('[data-testid="share-button"]');
+      await a.click('[data-testid="share-start-session"]');
+      await expect(a.getByTestId('projects-menu')).toContainText('🔗');
+      const roomId = await a.evaluate(
+        () => new URLSearchParams(location.search).get('room'),
+      );
+      const sharedLabel = ((await a.getByTestId('projects-menu').textContent()) ?? '')
+        .replace('▾', '').trim();
+      expect(sharedLabel.startsWith('🔗')).toBe(true);
+
+      // B joins the room — its trigger shows the same shared name.
+      const { ctx: ctxB, page: b } = await makeContext(browser);
+      try {
+        await b.goto(`/?room=${roomId}&syncBase=${encodeURIComponent(syncBase)}`);
+        await bridgeReady(b);
+        await expect(b.getByTestId('projects-menu')).toContainText('🔗', { timeout: 8_000 });
+        await expect
+          .poll(async () => ((await b.getByTestId('projects-menu').textContent()) ?? '')
+            .replace('▾', '').trim(), { timeout: 8_000 })
+          .toBe(sharedLabel);
+      } finally {
+        await ctxB.close();
+      }
+    } finally {
+      await ctxA.close();
+    }
+  });
 });

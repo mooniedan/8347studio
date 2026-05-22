@@ -844,8 +844,33 @@
     shareOpen = true;
   }
   function closeShare() { shareOpen = false; }
-  function startCollabSession() { void session.share(project, selectedTrackIdx); }
+  function startCollabSession() {
+    // Copy the (per-machine registry) project name into the synced
+    // Y.Doc meta so joiners show the same name — the registry entry
+    // never crosses the wire, but meta does.
+    if (project && activeProjectId) {
+      const info = loadRegistry().projects.find((p) => p.id === activeProjectId);
+      if (info) {
+        const p = project;
+        p.doc.transact(() => p.meta.set('name', info.name));
+      }
+    }
+    void session.share(project, selectedTrackIdx);
+  }
   function endCollabSession() { session.detach(); }
+
+  // Synced project name for the menu trigger when in a room. The
+  // joiner has no registry entry for the shared project, so it reads
+  // the name from the synced Y.Doc meta (set by the host on share).
+  let sharedName = $state<string | null>(null);
+  $effect(() => {
+    const p = project;
+    if (!p || !session.activeRoomId) { sharedName = null; return; }
+    const read = () => { sharedName = (p.meta.get('name') as string | undefined) ?? null; };
+    read();
+    p.meta.observe(read);
+    return () => p.meta.unobserve(read);
+  });
 
   function bindPendingCC(paramId: number) {
     if (!project || learnPendingCC == null) return;
@@ -946,6 +971,8 @@
 
         <ProjectsMenu
           activeProjectId={activeProjectId}
+          roomId={session.activeRoomId}
+          sharedName={sharedName}
           onSwitch={(id) => void switchProject(id)}
           onImport={(file) => importBundleAsProject(file)}
         />

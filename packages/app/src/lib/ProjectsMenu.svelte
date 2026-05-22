@@ -20,10 +20,18 @@
 
   const {
     activeProjectId,
+    roomId = null,
+    sharedName = null,
     onSwitch,
     onImport,
   }: {
     activeProjectId: string | null;
+    /// Active collab room id, or null in local mode. When set, the
+    /// trigger shows the shared project (its synced name) rather than
+    /// the per-machine registry name — a joiner has no registry entry
+    /// for the host's project.
+    roomId?: string | null;
+    sharedName?: string | null;
     onSwitch: (id: string) => void;
     onImport: (file: File) => void | Promise<void>;
   } = $props();
@@ -170,8 +178,15 @@
 </script>
 
 <div class="wrap">
-  <button class="trigger" data-testid="projects-menu" onclick={toggle} aria-expanded={open}>
-    {activeProject?.name ?? 'Project'} ▾
+  <button
+    class="trigger"
+    class:shared={roomId != null}
+    data-testid="projects-menu"
+    onclick={toggle}
+    aria-expanded={open}
+    title={roomId != null ? `Shared session · room ${roomId}` : undefined}
+  >
+    {#if roomId != null}🔗 {sharedName ?? activeProject?.name ?? 'Shared project'}{:else}{activeProject?.name ?? 'Project'}{/if} ▾
   </button>
   {#if open}
     <div class="menu" data-testid="projects-menu-list">
@@ -297,6 +312,10 @@
   }
   .trigger:hover {
     background: #232323;
+  }
+  .trigger.shared {
+    color: #ff8c00;
+    border-color: #5a3f10;
   }
   .menu {
     position: absolute;
