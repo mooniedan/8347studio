@@ -235,6 +235,16 @@ export function syncUrlForRoom(roomId: string): string {
     base = (import.meta.env as Record<string, string | undefined>).VITE_SYNC_URL
       ?? 'ws://localhost:1234';
   }
+  // A path-only base ("/sync") means "same origin as this page". dev:share
+  // sets this so each device connects through ITS OWN origin (and its own
+  // already-accepted self-signed cert) to the Vite ws proxy — rather than
+  // a hard-coded host whose cert the device may never have accepted (e.g.
+  // the Mac on `localhost` dialing a `wss://<lan-ip>` it never visited,
+  // which silently fails the TLS handshake → "disconnected").
+  if (base.startsWith('/')) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    base = `${proto}//${window.location.host}${base}`;
+  }
   const token = (import.meta.env as Record<string, string | undefined>).VITE_SYNC_TOKEN;
   const safeId = encodeURIComponent(roomId);
   const url = new URL(`${base.replace(/\/$/, '')}/room/${safeId}`);

@@ -56,7 +56,7 @@ console.log('──────────────────────�
 console.log('  8347 Studio — share mode (Phase-9 LAN testing)');
 console.log('───────────────────────────────────────────────────────');
 console.log(`  App:        https://${host}:${vitePort}/`);
-console.log(`  Sync:       wss://${host}:${vitePort}/sync/room/<id> (proxied)`);
+console.log(`  Sync:       same-origin /sync (Vite-proxied to ws sync server)`);
 console.log(`  Loopback:   https://localhost:${vitePort}/`);
 console.log('───────────────────────────────────────────────────────');
 console.log('  Tip: visit https://<host>:8347/?room=<id> on each device');
@@ -106,8 +106,12 @@ spawnChild('sync ', 'pnpm', ['--filter', 'sync-server', 'start'], {
 spawnChild('vite ', 'pnpm', ['--filter', 'app', 'dev'], {
   SHARE_MODE: '1',
   SYNC_PORT: String(syncPort),
-  // Same-origin wss path; Vite proxies /sync → the local ws sync server.
-  VITE_SYNC_URL: `wss://${host}:${vitePort}/sync`,
+  // Same-ORIGIN sync path (not a hard-coded host): each device connects
+  // to its own origin's /sync, which Vite proxies to the ws sync server.
+  // This avoids a localhost-opened host failing to dial wss://<lan-ip>
+  // (whose self-signed cert it never accepted). syncUrlForRoom expands
+  // the leading "/" against window.location.
+  VITE_SYNC_URL: '/sync',
   // Copied/share links swap in this host so a link grabbed while
   // browsing localhost still resolves from other devices on the LAN.
   VITE_SHARE_HOST: host,
