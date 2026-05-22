@@ -16,6 +16,9 @@ import {
   seedFromLegacy,
 } from './demo';
 
+// Re-export so the collab boot can seed an empty room (seed-if-empty).
+export { seedDefaults } from './demo';
+
 // Y.Doc-backed project state. Schema mirrors `.claude/dream.md` § "Project
 // state shape (Yjs)" so later phases extend the same shape rather than
 // reshape it.
@@ -96,6 +99,12 @@ export async function createProject(opts: CreateProjectOptions = {}): Promise<Pr
   } else if (project.tracks.length === 0) {
     if (opts.seed === 'demo') {
       seedDemoSong(project);
+    } else if (opts.seed === 'blank') {
+      // Intentionally unseeded. A collab joiner (`?room=<id>`) absorbs
+      // the room's shared project via sync; seeding a default track
+      // here would merge a duplicate project into the shared doc (the
+      // joiner would end up with its own default track *plus* every
+      // track from the host).
     } else {
       seedDefaults(project);
     }

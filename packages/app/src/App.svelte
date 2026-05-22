@@ -75,6 +75,7 @@
     setMidiBinding,
     removeMidiBinding,
     setSynthParam,
+    seedDefaults,
     PPQ,
     STEP_TICKS,
     type Project,
@@ -401,7 +402,7 @@
     doc.on('update', onUpdate);
   }
 
-  async function bootProject(docName: string, opts: { ephemeral?: boolean; seed?: 'demo' } = {}): Promise<void> {
+  async function bootProject(docName: string, opts: { ephemeral?: boolean; seed?: 'demo' | 'blank' } = {}): Promise<void> {
     // Read the per-project seed hint and clear it so a refresh of the
     // same project doesn't re-seed (the Y.Doc already exists in IDB
     // by the time the hint matters; createProject only seeds when
@@ -476,8 +477,20 @@
       // The server populates the doc via the y-protocols sync
       // handshake; the local replica persists only for the tab's
       // lifetime (no IDB mirror — keeps the data model uncomplicated).
-      await bootProject(`__room_${initialRoomId}__`, { ephemeral: true });
-      if (project) session.attach(project, initialRoomId, selectedTrackIdx);
+      // Boot BLANK — the room's shared project arrives via the sync
+      // handshake. Seeding a default here would merge a duplicate
+      // project into the shared doc (joiner ends up with its own
+      // default track plus the host's tracks). Once the initial state
+      // lands, if the room turned out to be empty we're its first
+      // occupant — seed a default project then so there's something to
+      // work with; a joiner that received content skips this.
+      await bootProject(`__room_${initialRoomId}__`, { ephemeral: true, seed: 'blank' });
+      if (project) {
+        const joined = project;
+        session.attach(joined, initialRoomId, selectedTrackIdx, () => {
+          if (joined.tracks.length === 0) seedDefaults(joined);
+        });
+      }
     } else {
       await bootProject(initialProject.docName);
       await reloadInstalledPlugins();

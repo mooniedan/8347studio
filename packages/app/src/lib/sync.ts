@@ -31,6 +31,11 @@ export interface SyncOptions {
   /// transport-bar status indicator (M5) and later the avatar list
   /// (M4 awareness UI).
   onStatusChange?: (status: SyncStatus) => void;
+  /// Fires once, the first time the server's initial state (a sync
+  /// step-2) has been applied to the doc. Callers use it to tell
+  /// "joined a room that already has content" from "joined an empty
+  /// room" — see App's collab boot (seed-if-empty).
+  onSynced?: () => void;
   /// Initial reconnect backoff in ms. Doubles up to `maxReconnectMs`.
   initialReconnectMs?: number;
   maxReconnectMs?: number;
@@ -51,6 +56,7 @@ export function attachSync(doc: Y.Doc, opts: SyncOptions): SyncHandle {
   let backoff = initialBackoff;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let status: SyncStatus = 'idle';
+  let syncedFired = false;
 
   const setStatus = (next: SyncStatus) => {
     if (status === next) return;
@@ -92,8 +98,14 @@ export function attachSync(doc: Y.Doc, opts: SyncOptions): SyncHandle {
     switch (messageType) {
       case MESSAGE_SYNC: {
         encoding.writeVarUint(enc, MESSAGE_SYNC);
-        syncProtocol.readSyncMessage(dec, enc, doc, ws);
+        const syncType = syncProtocol.readSyncMessage(dec, enc, doc, ws);
         if (encoding.length(enc) > 1) send(encoding.toUint8Array(enc));
+        // The server's step-2 carries the room's existing state. Once
+        // it lands, the doc reflects whatever the room holds.
+        if (!syncedFired && syncType === syncProtocol.messageYjsSyncStep2) {
+          syncedFired = true;
+          opts.onSynced?.();
+        }
         break;
       }
       case MESSAGE_AWARENESS: {

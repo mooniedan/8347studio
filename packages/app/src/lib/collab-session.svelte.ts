@@ -75,8 +75,15 @@ export interface CollabSession {
   readonly collab: CollabState | null;
   readonly user: CollabUser;
   /// Bring the session online for `project` under `roomId`. Idempotent;
-  /// a previous attachment is torn down first.
-  attach(project: Project, roomId: string, selectedTrackIdx: number): void;
+  /// a previous attachment is torn down first. `onSynced` fires once
+  /// when the room's initial state has been applied (used by the
+  /// collab boot to seed an empty room).
+  attach(
+    project: Project,
+    roomId: string,
+    selectedTrackIdx: number,
+    onSynced?: () => void,
+  ): void;
   /// Tear the session down without affecting the underlying Y.Doc.
   detach(): void;
   /// Apply name / color edits. Awareness updates immediately so peers
@@ -99,7 +106,12 @@ export function createCollabSession(initialRoomId: string | null): CollabSession
   let syncHandle: SyncHandle | null = null;
   let syncAwareness: Awareness | null = null;
 
-  function attach(project: Project, roomId: string, selectedTrackIdx: number): void {
+  function attach(
+    project: Project,
+    roomId: string,
+    selectedTrackIdx: number,
+    onSynced?: () => void,
+  ): void {
     // Idempotent — tear down any prior attachment first.
     syncHandle?.destroy();
     syncHandle = null;
@@ -120,6 +132,7 @@ export function createCollabSession(initialRoomId: string | null): CollabSession
       url: syncUrlForRoom(roomId),
       awareness,
       onStatusChange: (s) => { syncStatus = s; },
+      onSynced,
     });
     // Phase-9 M2 — turn on cloud asset upload/download so recordings
     // and imports flow between peers.
