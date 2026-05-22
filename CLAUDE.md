@@ -51,10 +51,16 @@ Read these before doing non-trivial work:
 
 - `pnpm --filter app dev` — Vite dev (HTTPS @ 8347, localhost only).
 - `pnpm dev:share` — Phase-9 LAN-testing mode. Boots Vite + the
-  sync-server on `0.0.0.0`, plain HTTP, prints LAN URLs so multiple
-  devices can join the same `?room=<id>`. Implementation:
-  `scripts/dev-share.mjs`; the `SHARE_MODE=1` env var in
-  `packages/app/vite.config.ts` drops the self-signed cert.
+  sync-server on `0.0.0.0` and prints LAN URLs so multiple devices can
+  join the same `?room=<id>`. Serves **HTTPS** (self-signed — accept
+  the cert warning once per device): a plain-HTTP LAN-IP origin is not
+  a secure context, so Chromium would ignore COOP/COEP (no
+  SharedArrayBuffer) and leave `AudioContext.audioWorklet` undefined,
+  breaking the engine. The sync server is reached same-origin via
+  `wss://<lan>:8347/sync` (Vite proxies it) to dodge mixed content.
+  Implementation: `scripts/dev-share.mjs`; `SHARE_MODE=1` in
+  `packages/app/vite.config.ts` binds `0.0.0.0` + adds the `/sync`
+  proxy.
 - `pnpm --filter sync-server start` — Phase-9 sync server alone
   (`ws://0.0.0.0:1234/room/<id>`).
 - `pnpm --filter sync-server test` — node --test for the wire

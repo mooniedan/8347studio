@@ -2,18 +2,21 @@
 // Phase-9 LAN-testing helper.
 //
 // Boots the sync-server + Vite dev server in one go, in a config that
-// other machines on the same LAN can reach without dealing with the
-// dev cert / mixed-content trap:
+// other machines on the same LAN can reach:
 //
-//   - Sync server listens on 0.0.0.0:1234.
-//   - Vite serves plain HTTP on 0.0.0.0:8347 (SHARE_MODE=1 in
-//     packages/app/vite.config.ts drops the self-signed cert).
-//   - VITE_SYNC_URL is set to ws://<detected LAN IP>:1234 so the
-//     bundled client points other-machine browsers at the LAN
-//     address, not localhost.
+//   - Sync server listens on 0.0.0.0:1234 (plain ws, local only).
+//   - Vite serves HTTPS on 0.0.0.0:8347 (self-signed cert via
+//     SHARE_MODE=1 in packages/app/vite.config.ts). HTTPS is required
+//     so the LAN-IP origin is a secure context — otherwise current
+//     Chromium ignores COOP/COEP (no SharedArrayBuffer) and
+//     AudioContext.audioWorklet is undefined, breaking the engine.
+//   - VITE_SYNC_URL points the client at wss://<LAN IP>:8347/sync,
+//     a SAME-ORIGIN path Vite proxies to the local sync server. This
+//     dodges the mixed-content trap (an https page can't open ws://)
+//     without putting TLS on the sync server.
 //
-// Prints both URLs (loopback + LAN) at startup. Ctrl-C tears down
-// both processes.
+// Each device hits a self-signed-cert warning once ("proceed"); after
+// that audio + collab both work. Ctrl-C tears down both processes.
 
 import { spawn } from 'node:child_process';
 import { networkInterfaces } from 'node:os';
@@ -52,12 +55,13 @@ const vitePort = 8347;
 console.log('───────────────────────────────────────────────────────');
 console.log('  8347 Studio — share mode (Phase-9 LAN testing)');
 console.log('───────────────────────────────────────────────────────');
-console.log(`  App:        http://${host}:${vitePort}/`);
-console.log(`  Sync:       ws://${host}:${syncPort}/room/<id>`);
-console.log(`  Loopback:   http://localhost:${vitePort}/`);
+console.log(`  App:        https://${host}:${vitePort}/`);
+console.log(`  Sync:       wss://${host}:${vitePort}/sync/room/<id> (proxied)`);
+console.log(`  Loopback:   https://localhost:${vitePort}/`);
 console.log('───────────────────────────────────────────────────────');
-console.log('  Tip: visit http://<host>:8347/?room=<id> on each device');
-console.log('       to join the same project. Ctrl-C to stop.');
+console.log('  Tip: visit https://<host>:8347/?room=<id> on each device');
+console.log('       to join the same project. Accept the self-signed');
+console.log('       cert warning once per device. Ctrl-C to stop.');
 console.log('───────────────────────────────────────────────────────');
 
 const children = [];
@@ -101,5 +105,7 @@ spawnChild('sync ', 'pnpm', ['--filter', 'sync-server', 'start'], {
 
 spawnChild('vite ', 'pnpm', ['--filter', 'app', 'dev'], {
   SHARE_MODE: '1',
-  VITE_SYNC_URL: `ws://${host}:${syncPort}`,
+  SYNC_PORT: String(syncPort),
+  // Same-origin wss path; Vite proxies /sync → the local ws sync server.
+  VITE_SYNC_URL: `wss://${host}:${vitePort}/sync`,
 });
