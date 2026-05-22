@@ -238,4 +238,48 @@ collabTest.describe('phase-9 M5 — share & join', () => {
       await ctxA.close();
     }
   });
+
+  // Phase-11 M4 — the owner grants a viewer edit access from the
+  // collaborator roster; the viewer's lock lifts. Revoke re-locks.
+  collabTest('owner grants a viewer edit access; revoke re-locks', async ({ browser, syncBase }) => {
+    collabTest.setTimeout(30_000);
+    const { ctx: ctxA, page: a } = await makeContext(browser);
+    try {
+      await a.goto(`/?syncBase=${encodeURIComponent(syncBase)}`);
+      await bridgeReady(a);
+      await a.click('[data-testid="share-button"]');
+      await a.click('[data-testid="share-start-session"]');
+      await expect
+        .poll(() => a.evaluate(() => (window as any).__bridge.collabPermissions().ownerId))
+        .not.toBeNull();
+      const roomId = await a.evaluate(() => new URLSearchParams(location.search).get('room'));
+      // Leave A's modal open on the Share-live tab to manage the roster.
+
+      const { ctx: ctxB, page: b } = await makeContext(browser);
+      try {
+        await b.goto(`/?room=${roomId}&syncBase=${encodeURIComponent(syncBase)}`);
+        await bridgeReady(b);
+        await expect(b.locator('[data-testid="viewonly-banner"]')).toBeVisible();
+        await expect(b.locator('[data-testid="add-synth-track"]')).toBeDisabled();
+
+        // B shows up in A's roster with a grant toggle; grant it.
+        const grant = a.locator('[data-testid^="share-grant-"]');
+        await expect(grant).toBeVisible({ timeout: 8_000 });
+        await grant.click();
+
+        // B can now edit.
+        await expect(b.locator('[data-testid="viewonly-banner"]')).toHaveCount(0);
+        await expect(b.locator('[data-testid="add-synth-track"]')).toBeEnabled();
+
+        // Revoke → B is locked again.
+        await grant.click();
+        await expect(b.locator('[data-testid="viewonly-banner"]')).toBeVisible();
+        await expect(b.locator('[data-testid="add-synth-track"]')).toBeDisabled();
+      } finally {
+        await ctxB.close();
+      }
+    } finally {
+      await ctxA.close();
+    }
+  });
 });

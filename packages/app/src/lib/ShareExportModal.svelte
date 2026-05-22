@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { getTrackName, getSyncPlayback, setSyncPlayback, type Project } from './project';
+  import {
+    getTrackName,
+    getSyncPlayback,
+    setSyncPlayback,
+    getCollabPermissions,
+    setProjectEditor,
+    type CollabPermissions,
+    type Project,
+  } from './project';
   import type { CollabSession } from './collab-session.svelte';
   import { shareableRoomUrl } from './sync';
   import { Button } from './ui';
@@ -68,16 +76,33 @@
   const inSession = $derived(session.activeRoomId != null);
   const peers = $derived(session.collab?.peers ?? []);
 
-  // Synced-playback toggle, mirrored from shared meta (default off →
-  // each peer's transport is independent).
+  // Synced-playback toggle + collab permissions, mirrored from shared
+  // meta. One observer keeps both in sync.
   let syncPlayback = $state(false);
+  let permissions = $state<CollabPermissions>({ ownerId: null, editors: [] });
   $effect(() => {
     if (!open) return;
-    const read = () => { syncPlayback = getSyncPlayback(project); };
+    const read = () => {
+      syncPlayback = getSyncPlayback(project);
+      permissions = getCollabPermissions(project);
+    };
     read();
     project.meta.observe(read);
     return () => project.meta.unobserve(read);
   });
+
+  // Phase-11 M4 — owner manages who can edit. The owner sees a
+  // per-peer grant toggle; everyone sees roles. Roles key off the
+  // stable userId published in awareness.
+  const amOwner = $derived(permissions.ownerId === session.user.id);
+  type Role = 'OWNER' | 'EDITOR' | 'VIEWER';
+  function roleFor(userId: string | undefined | null): Role {
+    if (permissions.ownerId == null) return 'EDITOR'; // unowned = open
+    if (userId && permissions.ownerId === userId) return 'OWNER';
+    if (userId && permissions.editors.includes(userId)) return 'EDITOR';
+    return 'VIEWER';
+  }
+  const selfRole = $derived(roleFor(session.user.id));
 
   /// Full shareable URL for the active room. In LAN share mode this
   /// swaps in the detected LAN IP so a link copied from `localhost`
@@ -302,9 +327,11 @@
                     <div class="who-name">{session.user.name}<span class="self">YOU</span></div>
                     <div class="where">{peerTrackLabel(selectedTrackIdx)}</div>
                   </div>
-                  <span class="role">OWNER</span>
+                  <span class="role" data-testid="share-self-role">{selfRole}</span>
                 </div>
                 {#each peers as p (p.id)}
+                  {@const peerId = p.state.user?.id}
+                  {@const role = roleFor(peerId)}
                   <div class="collab-row" data-testid={`share-collab-peer-${p.id}`}>
                     <span class="av" style:background-color={p.state.user?.color ?? 'var(--fg-3)'}>
                       {(p.state.user?.name ?? '?').slice(0, 1).toUpperCase()}
@@ -313,7 +340,18 @@
                       <div class="who-name">{p.state.user?.name ?? 'peer'}</div>
                       <div class="where">{peerTrackLabel(p.state.selectedTrackIdx)}</div>
                     </div>
-                    <span class="role">EDITOR</span>
+                    {#if amOwner && role !== 'OWNER' && peerId}
+                      <button
+                        class="grant"
+                        class:on={role === 'EDITOR'}
+                        data-testid={`share-grant-${p.id}`}
+                        aria-pressed={role === 'EDITOR'}
+                        title={role === 'EDITOR' ? 'Revoke editing' : 'Grant editing'}
+                        onclick={() => setProjectEditor(project, peerId, role !== 'EDITOR')}
+                      >{role === 'EDITOR' ? 'Can edit' : 'View only'}</button>
+                    {:else}
+                      <span class="role">{role}</span>
+                    {/if}
                   </div>
                 {/each}
               </div>
@@ -708,6 +746,25 @@
     font-size: 9px;
     letter-spacing: 0.06em;
     color: var(--fg-2);
+  }
+  .grant {
+    appearance: none;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    color: var(--fg-2);
+    background: var(--bg-3);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .grant:hover { color: var(--fg-0); }
+  .grant.on {
+    color: var(--accent-hi);
+    border-color: var(--accent-lo);
+    background: var(--accent-tint);
   }
 
   .empty {
