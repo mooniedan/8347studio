@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getTrackName, type Project } from './project';
   import type { CollabSession } from './collab-session.svelte';
+  import { shareableRoomUrl } from './sync';
   import { Button } from './ui';
   import {
     buildBundle,
@@ -67,14 +68,12 @@
   const inSession = $derived(session.activeRoomId != null);
   const peers = $derived(session.collab?.peers ?? []);
 
-  /// Full shareable URL for the active room, mirroring how
-  /// `session.share` builds it (`?room=<id>` on the current href).
-  const roomUrl = $derived.by(() => {
-    if (!session.activeRoomId) return null;
-    const u = new URL(window.location.href);
-    u.searchParams.set('room', session.activeRoomId);
-    return u.toString();
-  });
+  /// Full shareable URL for the active room. In LAN share mode this
+  /// swaps in the detected LAN IP so a link copied from `localhost`
+  /// still works on other devices (see shareableRoomUrl).
+  const roomUrl = $derived(
+    session.activeRoomId ? shareableRoomUrl(session.activeRoomId) : null,
+  );
 
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;

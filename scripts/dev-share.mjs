@@ -108,4 +108,7 @@ spawnChild('vite ', 'pnpm', ['--filter', 'app', 'dev'], {
   SYNC_PORT: String(syncPort),
   // Same-origin wss path; Vite proxies /sync → the local ws sync server.
   VITE_SYNC_URL: `wss://${host}:${vitePort}/sync`,
+  // Copied/share links swap in this host so a link grabbed while
+  // browsing localhost still resolves from other devices on the LAN.
+  VITE_SHARE_HOST: host,
 });

@@ -229,3 +229,16 @@ export function syncUrlForRoom(roomId: string): string {
   if (token) url.searchParams.set('token', token);
   return url.toString();
 }
+
+/// Build a room URL to hand to another device. Starts from the current
+/// page URL with `?room=<id>`, but in LAN share mode `dev:share`
+/// injects `VITE_SHARE_HOST` (the detected LAN IP) — we swap it into
+/// the hostname so a link copied while browsing `localhost` is still
+/// reachable from other machines. No-op (current origin) otherwise.
+export function shareableRoomUrl(roomId: string): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set('room', roomId);
+  const shareHost = (import.meta.env as Record<string, string | undefined>).VITE_SHARE_HOST;
+  if (shareHost) url.hostname = shareHost;
+  return url.toString();
+}

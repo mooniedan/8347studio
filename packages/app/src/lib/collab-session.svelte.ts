@@ -15,6 +15,7 @@ import { Awareness } from 'y-protocols/awareness';
 import {
   attachSync,
   syncUrlForRoom,
+  shareableRoomUrl,
   type SyncHandle,
   type SyncStatus,
 } from './sync';
@@ -159,9 +160,7 @@ export function createCollabSession(initialRoomId: string | null): CollabSession
       url.searchParams.set('room', roomId);
       window.history.replaceState(null, '', url.toString());
     }
-    const shareUrl = new URL(window.location.href);
-    shareUrl.searchParams.set('room', roomId);
-    const stringified = shareUrl.toString();
+    const stringified = shareableRoomUrl(roomId);
     try {
       await navigator.clipboard.writeText(stringified);
     } catch {
