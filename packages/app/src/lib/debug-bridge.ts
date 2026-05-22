@@ -43,6 +43,7 @@ import {
   removeMidiBinding,
   listMidiBindings,
   type MidiBinding,
+  getCollabPermissions,
   getPianoRollClipForTrack,
   getStepSeqClipForTrack,
   getTrackColor,
@@ -247,6 +248,9 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
       withProject(deps, (p) => { removeMidiBinding(p, cc); return true; }, false),
     listMidiBindings: () =>
       withProject(deps, (p) => listMidiBindings(p), [] as ReturnType<typeof listMidiBindings>),
+    /// Phase-11 — collab permission state (owner + granted editors).
+    collabPermissions: () =>
+      withProject(deps, (p) => getCollabPermissions(p), { ownerId: null, editors: [] as string[] }),
     /// Phase-8 M1 — pure manifest validator. Safe to expose.
     parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
     /// Phase-8 M5b — inject a manifest into `meta.installedPlugins`

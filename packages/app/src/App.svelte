@@ -76,6 +76,7 @@
     removeMidiBinding,
     setSynthParam,
     seedDefaults,
+    claimProjectOwner,
     PPQ,
     STEP_TICKS,
     type Project,
@@ -855,6 +856,9 @@
         p.doc.transact(() => p.meta.set('name', info.name));
       }
     }
+    // Phase-11 — the sharer owns the session; joiners are read-only
+    // until granted. Claiming resets editor grants for a fresh session.
+    if (project) claimProjectOwner(project, session.user.id);
     void session.share(project, selectedTrackIdx);
   }
   function endCollabSession() { session.detach(); }

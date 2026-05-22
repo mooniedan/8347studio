@@ -155,4 +155,50 @@ collabTest.describe('phase-9 M5 — share & join', () => {
       await ctxA.close();
     }
   });
+
+  // Phase-11 M1 — the sharer owns the session; a joiner is a non-editor
+  // (viewer) by default. Permission state lives in synced meta.
+  collabTest('sharer becomes owner; joiner is a viewer by default', async ({ browser, syncBase }) => {
+    collabTest.setTimeout(30_000);
+    const { ctx: ctxA, page: a } = await makeContext(browser);
+    try {
+      await a.goto(`/?syncBase=${encodeURIComponent(syncBase)}`);
+      await bridgeReady(a);
+      const ownerId = await a.evaluate(
+        () => JSON.parse(localStorage.getItem('collab.user.v1') ?? '{}').id,
+      );
+      // Before sharing: unowned (everyone can edit / local mode).
+      expect(await a.evaluate(() => (window as any).__bridge.collabPermissions().ownerId)).toBeNull();
+
+      await a.click('[data-testid="share-button"]');
+      await a.click('[data-testid="share-start-session"]');
+      // A is now the owner; no editors granted yet.
+      await expect
+        .poll(() => a.evaluate(() => (window as any).__bridge.collabPermissions().ownerId))
+        .toBe(ownerId);
+      expect(await a.evaluate(() => (window as any).__bridge.collabPermissions().editors)).toEqual([]);
+      const roomId = await a.evaluate(() => new URLSearchParams(location.search).get('room'));
+
+      // B joins → sees the same owner (synced), and B is neither owner
+      // nor a granted editor.
+      const { ctx: ctxB, page: b } = await makeContext(browser);
+      try {
+        await b.goto(`/?room=${roomId}&syncBase=${encodeURIComponent(syncBase)}`);
+        await bridgeReady(b);
+        const bId = await b.evaluate(
+          () => JSON.parse(localStorage.getItem('collab.user.v1') ?? '{}').id,
+        );
+        await expect
+          .poll(() => b.evaluate(() => (window as any).__bridge.collabPermissions().ownerId))
+          .toBe(ownerId);
+        const perms = await b.evaluate(() => (window as any).__bridge.collabPermissions());
+        expect(perms.ownerId).not.toBe(bId);
+        expect(perms.editors).not.toContain(bId);
+      } finally {
+        await ctxB.close();
+      }
+    } finally {
+      await ctxA.close();
+    }
+  });
 });

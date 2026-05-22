@@ -8,6 +8,9 @@
 import type { Awareness } from 'y-protocols/awareness';
 
 export interface PeerUser {
+  /// Stable per-device id (Phase 11) — the key the owner grants edit
+  /// access to. Optional for back-compat with pre-Phase-11 peers.
+  id?: string;
   name: string;
   color: string;
 }

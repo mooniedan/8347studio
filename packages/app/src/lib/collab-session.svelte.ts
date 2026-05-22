@@ -32,20 +32,35 @@ const COLLAB_PALETTE = [
   '#6f4ef2', '#ef476f', '#26a69a', '#9c89ff',
 ];
 
-export interface CollabUser { name: string; color: string }
+/// Stable per-device identity. `id` is the grant key for collab edit
+/// permissions (Phase 11) — it persists across reconnects so a granted
+/// editor stays granted. Production accounts will replace the
+/// device-minted id with an account id behind the same field.
+export interface CollabUser { id: string; name: string; color: string }
 
 function loadCollabUser(): CollabUser {
   try {
     const raw = localStorage.getItem(COLLAB_USER_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<CollabUser>;
-      if (parsed.name && parsed.color) return parsed as CollabUser;
+      if (parsed.name && parsed.color) {
+        // Backfill a stable id for users persisted before Phase 11.
+        const id = parsed.id ?? `u_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+        const user = { id, name: parsed.name, color: parsed.color };
+        if (!parsed.id) { try { localStorage.setItem(COLLAB_USER_KEY, JSON.stringify(user)); } catch { /* blocked */ } }
+        return user;
+      }
     }
   } catch { /* localStorage may be blocked */ }
-  return {
+  const fresh: CollabUser = {
+    id: `u_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
     name: `Anon ${Math.floor(Math.random() * 9000) + 1000}`,
     color: COLLAB_PALETTE[Math.floor(Math.random() * COLLAB_PALETTE.length)],
   };
+  // Persist on first use so the identity (and its edit grants) is
+  // stable across reloads.
+  try { localStorage.setItem(COLLAB_USER_KEY, JSON.stringify(fresh)); } catch { /* blocked */ }
+  return fresh;
 }
 
 function saveCollabUser(u: CollabUser): void {
@@ -121,7 +136,7 @@ export function createCollabSession(initialRoomId: string | null): CollabSession
     syncAwareness = null;
 
     const awareness = new Awareness(project.doc);
-    awareness.setLocalStateField('user', { name: user.name, color: user.color });
+    awareness.setLocalStateField('user', { id: user.id, name: user.name, color: user.color });
     // Reflect the user's currently-selected track from the moment we
     // connect so peers see our position without waiting for the next
     // track-row click.
@@ -155,7 +170,7 @@ export function createCollabSession(initialRoomId: string | null): CollabSession
   function setUser(next: Partial<CollabUser>): void {
     user = { ...user, ...next };
     saveCollabUser(user);
-    syncAwareness?.setLocalStateField('user', { name: user.name, color: user.color });
+    syncAwareness?.setLocalStateField('user', { id: user.id, name: user.name, color: user.color });
   }
 
   async function share(

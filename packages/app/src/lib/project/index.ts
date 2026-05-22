@@ -1443,6 +1443,60 @@ export function setSyncPlayback(p: Project, on: boolean): void {
   p.doc.transact(() => p.meta.set('syncPlayback', on));
 }
 
+// ---- Phase-11 collab permissions (client-side / soft tier) ----------
+//
+// `meta.collab = { ownerId, editors: { <userId>: true } }`. Owner is
+// the sharer (claimed on Start session); editors are granted by stable
+// per-device userId. An UNOWNED project is always editable (local mode
+// / pre-share); once owned, only owner + granted editors may edit —
+// enforced client-side for now (see phase-11 plan, M3 deferred).
+
+export interface CollabPermissions {
+  ownerId: string | null;
+  editors: string[];
+}
+
+function readCollabMeta(p: Project): { ownerId?: string | null; editors?: Record<string, boolean> } {
+  return (p.meta.get('collab') as { ownerId?: string | null; editors?: Record<string, boolean> } | undefined) ?? {};
+}
+
+export function getCollabPermissions(p: Project): CollabPermissions {
+  const c = readCollabMeta(p);
+  const editors = c.editors ? Object.keys(c.editors).filter((k) => c.editors![k]) : [];
+  return { ownerId: c.ownerId ?? null, editors };
+}
+
+/// Claim ownership of the live session for `userId` (the sharer). Sets
+/// owner + clears editor grants — a fresh session starts owner-only.
+export function claimProjectOwner(p: Project, userId: string): void {
+  p.doc.transact(() => p.meta.set('collab', { ownerId: userId, editors: {} }));
+}
+
+export function setProjectEditor(p: Project, userId: string, canEdit: boolean): void {
+  p.doc.transact(() => {
+    const c = readCollabMeta(p);
+    const editors = { ...(c.editors ?? {}) };
+    if (canEdit) editors[userId] = true;
+    else delete editors[userId];
+    p.meta.set('collab', { ownerId: c.ownerId ?? null, editors });
+  });
+}
+
+export function isProjectOwner(p: Project, userId: string | null): boolean {
+  return userId != null && getCollabPermissions(p).ownerId === userId;
+}
+
+/// Whether `userId` may edit the shared project. Unowned → always
+/// editable; owned → owner + granted editors only. Callers gate this
+/// behind "are we in a room" so a locally-opened project (with a stale
+/// owner from a past share) stays editable.
+export function canEditProject(p: Project, userId: string | null): boolean {
+  const perms = getCollabPermissions(p);
+  if (perms.ownerId == null) return true;
+  if (perms.ownerId === userId) return true;
+  return userId != null && perms.editors.includes(userId);
+}
+
 export function setBpm(p: Project, bpm: number): void {
   if (p.tempoMap.length === 0) {
     p.tempoMap.push([{ tick: 0, bpm, num: 4, den: 4 }]);
