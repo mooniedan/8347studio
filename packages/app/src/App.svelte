@@ -93,6 +93,12 @@
   import { buildMidiHandler } from './lib/midi-routing';
   import * as assetStore from './lib/asset-store';
   import { parseBundle } from './lib/bundle';
+  import {
+    saveCheckpoint,
+    listCheckpoints,
+    getCheckpointData,
+    type CheckpointMeta,
+  } from './lib/checkpoints';
   import { enrichDemoSong } from './lib/demo-enrichment';
   import { attachWindowDebug } from './lib/debug-bridge';
   import {
@@ -194,6 +200,8 @@
   let bridge = $state<Bridge | null>(null);
   let selectedTrackIdx = $state(0);
   let activeProjectId = $state<string | null>(null);
+  // Active project's IDB docName — the key for version checkpoints (M5).
+  let currentDocName = $state('');
   // Bumped when a collab joiner's room content first arrives. Folded
   // into the project-view key so the views — which mounted against an
   // empty doc and won't observe late-synced tracks/clips — re-mount
@@ -421,6 +429,7 @@
     const p = await createProject({ docName, seed, ephemeral: opts.ephemeral });
     if (info?.id && info.seed) clearSeedHint(info.id);
     project = p;
+    currentDocName = docName;
 
     demoDirty = false;
     exposeDebugHandle(p);
@@ -644,8 +653,15 @@
     }
     const fallback = file.name.replace(/\.8347\.zip$/i, '').replace(/\.zip$/i, '');
     const name = (manifest?.name || fallback || 'Imported').trim();
-    const info = createProjectInfo(name);
+    await hydrateProjectFromUpdate(name, projectBytes);
+  }
 
+  /// Create a brand-new registered project from a raw Y.Doc update and
+  /// switch to it. Shared by bundle import (M7c) and version restore
+  /// (M5). Pre-seeds the IDB store before booting (the saveDemoAs flush
+  /// dance) so createProject's blank seed doesn't clobber the state.
+  async function hydrateProjectFromUpdate(name: string, projectBytes: Uint8Array): Promise<void> {
+    const info = createProjectInfo(name);
     await tearDownCurrent();
     const doc = new Y.Doc();
     const { IndexeddbPersistence } = await import('y-indexeddb');
@@ -655,13 +671,28 @@
     await new Promise<void>((resolve) => { queueMicrotask(resolve); });
     provider.destroy();
     doc.destroy();
-
     setLastOpenedProject(info.id);
     activeProjectId = info.id;
     inDemo = false;
     selectedTrackIdx = 0;
     await bootProject(info.docName);
     await reloadInstalledPlugins();
+  }
+
+  // Phase-11 M5 — version history (checkpoints). Snapshots key off the
+  // active docName. Restore forks to a new project (reliable recovery
+  // without an in-place CRDT rewind).
+  async function saveVersion(label: string): Promise<void> {
+    if (!project || !currentDocName) return;
+    await saveCheckpoint(currentDocName, Y.encodeStateAsUpdate(project.doc), label.trim());
+  }
+  function loadVersions(): Promise<CheckpointMeta[]> {
+    return currentDocName ? listCheckpoints(currentDocName) : Promise.resolve([]);
+  }
+  async function restoreVersion(id: number): Promise<void> {
+    const bytes = await getCheckpointData(id);
+    if (!bytes) return;
+    await hydrateProjectFromUpdate(`Restored · ${new Date().toLocaleString()}`, bytes);
   }
 
   // Phase-6 M5: tick-publishing loop. Runs while transport is on,
@@ -877,6 +908,26 @@
     compute();
     p.meta.observe(compute);
     return () => p.meta.unobserve(compute);
+  });
+
+  // Phase-11 M5 — periodic auto-checkpoint. Any Y.Doc edit marks the
+  // project dirty; a timer saves an 'auto' version when dirty, so the
+  // version history accrues over time without manual saves.
+  const AUTO_CHECKPOINT_MS = 180_000;
+  let versionDirty = false;
+  $effect(() => {
+    const p = project;
+    const docName = currentDocName;
+    if (!p || !docName) return;
+    versionDirty = false;
+    const onUpdate = () => { versionDirty = true; };
+    p.doc.on('update', onUpdate);
+    const timer = setInterval(() => {
+      if (!versionDirty) return;
+      versionDirty = false;
+      void saveCheckpoint(docName, Y.encodeStateAsUpdate(p.doc), 'auto');
+    }, AUTO_CHECKPOINT_MS);
+    return () => { p.doc.off('update', onUpdate); clearInterval(timer); };
   });
 
   // Synced project name for the menu trigger when in a room. The
@@ -1384,6 +1435,9 @@
         selectedTrackIdx={selectedTrackIdx}
         onStartSession={startCollabSession}
         onEndSession={endCollabSession}
+        onSaveVersion={saveVersion}
+        loadVersions={loadVersions}
+        onRestoreVersion={(id) => { closeShare(); void restoreVersion(id); }}
         onClose={closeShare}
       />
     </div>

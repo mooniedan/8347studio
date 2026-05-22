@@ -25,6 +25,7 @@
     type RenderRange,
   } from './render';
   import type { BitDepth } from './wav';
+  import type { CheckpointMeta } from './checkpoints';
 
   /**
    * Phase-10 M7 — Share & Export modal (P13).
@@ -38,7 +39,7 @@
    * M7a ships the shell + Share-live tab; the Export / Render tab
    * buttons render disabled until their milestones land.
    */
-  type ShareTab = 'share' | 'export' | 'render';
+  type ShareTab = 'share' | 'export' | 'render' | 'versions';
 
   const {
     open,
@@ -48,6 +49,9 @@
     selectedTrackIdx,
     onStartSession,
     onEndSession,
+    onSaveVersion,
+    loadVersions,
+    onRestoreVersion,
     onClose,
   }: {
     open: boolean;
@@ -57,6 +61,9 @@
     selectedTrackIdx: number;
     onStartSession: () => void;
     onEndSession: () => void;
+    onSaveVersion: (label: string) => Promise<void>;
+    loadVersions: () => Promise<CheckpointMeta[]>;
+    onRestoreVersion: (id: number) => void;
     onClose: () => void;
   } = $props();
 
@@ -64,6 +71,7 @@
     { id: 'share', num: '01', label: 'Share live', ready: true },
     { id: 'export', num: '02', label: 'Export bundle', ready: true },
     { id: 'render', num: '03', label: 'Render audio', ready: true },
+    { id: 'versions', num: '04', label: 'Versions', ready: true },
   ];
 
   let tab = $state<ShareTab>(initialTab);
@@ -197,6 +205,30 @@
     const m = Math.floor(sec / 60);
     const s = sec - m * 60;
     return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
+  }
+
+  // ── Versions tab (M5) ────────────────────────────────────────────
+  let versions = $state<CheckpointMeta[]>([]);
+  let versionLabel = $state('');
+  let savingVersion = $state(false);
+
+  async function refreshVersions() { versions = await loadVersions(); }
+  $effect(() => {
+    if (open && tab === 'versions') void refreshVersions();
+  });
+  async function doSaveVersion() {
+    if (savingVersion) return;
+    savingVersion = true;
+    try {
+      await onSaveVersion(versionLabel);
+      versionLabel = '';
+      await refreshVersions();
+    } finally {
+      savingVersion = false;
+    }
+  }
+  function fmtVersionTime(ts: number): string {
+    return new Date(ts).toLocaleString();
   }
 
   async function doRender() {
@@ -482,6 +514,44 @@
             </div>
             <div class="note">WASM-plugin inserts are not included in offline renders.</div>
           </div>
+        {:else if tab === 'versions'}
+          <div class="field">
+            <div class="lbl">
+              SAVE VERSION
+              <span class="hint">snapshot the project now — restore any version as a new project</span>
+            </div>
+            <div class="input-row">
+              <input
+                class="text-input"
+                placeholder="Label (optional)"
+                data-testid="share-version-label"
+                value={versionLabel}
+                oninput={(e) => { versionLabel = (e.currentTarget as HTMLInputElement).value; }}
+              />
+            </div>
+          </div>
+
+          {#if versions.length === 0}
+            <div class="empty" data-testid="share-versions-empty">
+              No saved versions yet. Save one now — auto-checkpoints also
+              accrue as you work.
+            </div>
+          {:else}
+            <ul class="versions" data-testid="share-versions">
+              {#each versions as v (v.id)}
+                <li class="version" data-testid={`share-version-${v.id}`}>
+                  <span class="v-time mono">{fmtVersionTime(v.createdAt)}</span>
+                  <span class="v-label">{v.label || (v.label === 'auto' ? 'auto' : '—')}</span>
+                  <span class="v-size mono">{formatBytes(v.bytes)}</span>
+                  <button
+                    class="v-restore"
+                    data-testid={`share-restore-${v.id}`}
+                    onclick={() => onRestoreVersion(v.id)}
+                  >Open as project</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/if}
       </section>
 
@@ -504,6 +574,9 @@
             <span class="k">OUTPUT</span>
             <span class="v">{safeName()}.wav</span>
             · {fmtDuration(renderSeconds)}
+          {:else if tab === 'versions'}
+            <span class="k">HISTORY</span>
+            <span class="v">{versions.length}</span> saved
           {/if}
         </div>
         <div class="actions">
@@ -543,6 +616,16 @@
               disabled={rendering}
               onclick={doRender}
             >● {rendering ? 'Rendering…' : 'Render'}</Button>
+          {:else if tab === 'versions'}
+            <Button variant="ghost" testId="share-versions-cancel" onclick={onClose}>
+              Close
+            </Button>
+            <Button
+              variant="primary"
+              testId="share-save-version"
+              disabled={savingVersion}
+              onclick={doSaveVersion}
+            >✚ {savingVersion ? 'Saving…' : 'Save version'}</Button>
           {/if}
         </div>
       </footer>
@@ -775,6 +858,42 @@
     padding: var(--sp-5);
     text-align: center;
   }
+
+  .versions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .version {
+    display: grid;
+    grid-template-columns: max-content 1fr max-content max-content;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-2);
+    border: 1px solid var(--line-0);
+    border-radius: var(--r-sm);
+  }
+  .v-time { color: var(--fg-1); font-size: var(--text-11); }
+  .v-label { color: var(--fg-2); font-size: var(--text-11); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v-size { color: var(--fg-3); font-size: var(--text-10); }
+  .v-restore {
+    appearance: none;
+    font-size: var(--text-10);
+    color: var(--fg-1);
+    background: var(--bg-3);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    padding: 2px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .v-restore:hover { color: var(--fg-0); border-color: var(--accent-lo); }
 
   .input-row {
     display: flex;
