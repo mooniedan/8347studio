@@ -192,6 +192,12 @@
   let bridge = $state<Bridge | null>(null);
   let selectedTrackIdx = $state(0);
   let activeProjectId = $state<string | null>(null);
+  // Bumped when a collab joiner's room content first arrives. Folded
+  // into the project-view key so the views — which mounted against an
+  // empty doc and won't observe late-synced tracks/clips — re-mount
+  // once the shared project lands.
+  let collabViewEpoch = $state(0);
+  const projectViewKey = $derived(`${activeProjectId}#${collabViewEpoch}`);
   // Tracks the selected track's plugin id so the panel re-mounts on
   // synth-track switch and disappears for non-synth tracks.
   let selectedPluginId = $derived.by(() => {
@@ -489,6 +495,10 @@
         const joined = project;
         session.attach(joined, initialRoomId, selectedTrackIdx, () => {
           if (joined.tracks.length === 0) seedDefaults(joined);
+          // Re-mount the project views: they mounted against the empty
+          // pre-sync doc and won't otherwise pick up the now-present
+          // tracks/clips (their observers bail when there's no clip).
+          collabViewEpoch += 1;
         });
       }
     } else {
@@ -940,7 +950,7 @@
           onImport={(file) => importBundleAsProject(file)}
         />
 
-        {#key activeProjectId}
+        {#key projectViewKey}
           <div class="transport-host"><Transport {project} collab={session.collab} /></div>
         {/key}
 
@@ -1115,7 +1125,7 @@
 
       <!-- LEFT RAIL: track list. -->
       <aside class="rail" data-testid="rail">
-        {#key activeProjectId}
+        {#key projectViewKey}
           <TrackList
             {project}
             selectedIdx={selectedTrackIdx}
@@ -1198,7 +1208,7 @@
             {/if}
           </div>
         {/if}
-        {#key activeProjectId}
+        {#key projectViewKey}
           {#if selectedTrackKind === 'Audio'}
             <div class="track-view">
               <AudioTrackView
@@ -1257,7 +1267,7 @@
         height={layout.drawerHeight}
         popped={mixerPopup != null && !mixerPopup.closed}
       >
-        {#key activeProjectId}
+        {#key projectViewKey}
           <Mixer
             {project}
             onPopout={() => {
