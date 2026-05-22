@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getTrackName, type Project } from './project';
+  import { getTrackName, getSyncPlayback, setSyncPlayback, type Project } from './project';
   import type { CollabSession } from './collab-session.svelte';
   import { shareableRoomUrl } from './sync';
   import { Button } from './ui';
@@ -67,6 +67,17 @@
 
   const inSession = $derived(session.activeRoomId != null);
   const peers = $derived(session.collab?.peers ?? []);
+
+  // Synced-playback toggle, mirrored from shared meta (default off →
+  // each peer's transport is independent).
+  let syncPlayback = $state(false);
+  $effect(() => {
+    if (!open) return;
+    const read = () => { syncPlayback = getSyncPlayback(project); };
+    read();
+    project.meta.observe(read);
+    return () => project.meta.unobserve(read);
+  });
 
   /// Full shareable URL for the active room. In LAN share mode this
   /// swaps in the detected LAN IP so a link copied from `localhost`
@@ -257,6 +268,24 @@
                 <b>Anyone with the link can edit.</b>
                 Cursors, selections and recordings sync live.
               </span>
+            </div>
+
+            <div class="field">
+              <div class="lbl">PLAYBACK</div>
+              <button
+                type="button"
+                class="toggle"
+                class:on={syncPlayback}
+                data-testid="share-sync-playback"
+                aria-pressed={syncPlayback}
+                onclick={() => setSyncPlayback(project, !syncPlayback)}
+              >
+                <span class="sw"></span>
+                <span class="toggle-lbl">
+                  Sync playback
+                  <span class="hint">play / stop drives every peer · off = each plays on their own</span>
+                </span>
+              </button>
             </div>
 
             <div class="field">

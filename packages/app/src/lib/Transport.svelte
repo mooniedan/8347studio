@@ -8,6 +8,7 @@
     setBpm,
     getLoopRegion,
     setLoopRegion,
+    getSyncPlayback,
     getStepSeqClipForTrack,
     readSteps,
     type Project,
@@ -30,6 +31,10 @@
   let bpm = $state(untrack(() => getBpm(project)));
   let playing = $state(false);
   let currentTick = $state(0);
+  // Synced-playback mode (default off → each peer plays independently).
+  // Mirrored from shared meta so the broadcast + follow paths below
+  // only engage when peers have opted into a shared transport.
+  let syncPlayback = $state(untrack(() => getSyncPlayback(project)));
 
   const initialLoop = untrack(() => getLoopRegion(project));
   let loopEnabled = $state(initialLoop != null);
@@ -53,6 +58,7 @@
         loopStartBar = Math.floor(lr.startTick / TICKS_PER_BAR) + 1;
         loopEndBar = Math.max(loopStartBar, Math.ceil(lr.endTick / TICKS_PER_BAR));
       }
+      syncPlayback = getSyncPlayback(project);
     };
     project.meta.observe(metaObserver);
     return () => {
@@ -91,8 +97,9 @@
     // Phase-9 M3 — broadcast our new transport state so peers in the
     // same room follow. The hostId (= awareness clientID) marks this
     // press as ours; followers see startedAtMs win arbitration if
-    // two peers click at the same time.
-    if (collab && collab.selfId != null) {
+    // two peers click at the same time. Only when synced playback is on
+    // (default off → each peer's transport is independent).
+    if (syncPlayback && collab && collab.selfId != null) {
       const state: TransportState = {
         playing,
         hostId: collab.selfId,
@@ -109,6 +116,7 @@
   // matches our local playing flag.
   let lastAppliedRemote: TransportState | null = null;
   $effect(() => {
+    if (!syncPlayback) return; // independent transport — don't follow peers
     const remote = collab?.latestPeerTransport ?? null;
     if (!remote) return;
     if (remote === lastAppliedRemote) return;

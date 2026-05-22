@@ -1431,6 +1431,18 @@ export function setLoopRegion(p: Project, region: LoopRegion | null): void {
   });
 }
 
+/// Phase-11 prelude — synced playback. When true, a play/stop on one
+/// peer drives the transport on every peer in the room; when false
+/// (the default) each peer plays/stops independently. Stored in the
+/// shared meta so all peers agree on the mode.
+export function getSyncPlayback(p: Project): boolean {
+  return p.meta.get('syncPlayback') === true;
+}
+
+export function setSyncPlayback(p: Project, on: boolean): void {
+  p.doc.transact(() => p.meta.set('syncPlayback', on));
+}
+
 export function setBpm(p: Project, bpm: number): void {
   if (p.tempoMap.length === 0) {
     p.tempoMap.push([{ tick: 0, bpm, num: 4, den: 4 }]);

@@ -58,6 +58,15 @@ async function playLabel(page: Page): Promise<string> {
   return text?.trim() ?? '';
 }
 
+/// Synced playback is OFF by default (each peer plays independently).
+/// Flip it on via the Share modal; it lives in shared meta, so toggling
+/// on one peer propagates to the room.
+async function enableSyncPlayback(page: Page) {
+  await page.click('[data-testid="share-button"]');
+  await page.click('[data-testid="share-sync-playback"]');
+  await page.click('[data-testid="share-export-close"]');
+}
+
 collabTest.describe('phase-9 M3 — shared transport', () => {
 
   collabTest('A presses play → B follows within RTT', async ({ browser, urlFor }) => {
@@ -73,6 +82,9 @@ collabTest.describe('phase-9 M3 — shared transport', () => {
       // Both start stopped.
       expect(await playLabel(a)).toMatch(/play/i);
       expect(await playLabel(b)).toMatch(/play/i);
+
+      // Opt into synced playback (off by default).
+      await enableSyncPlayback(a);
 
       // A presses Play. B's label should flip to "Stop" within a
       // moment as the awareness update lands.
@@ -103,12 +115,41 @@ collabTest.describe('phase-9 M3 — shared transport', () => {
       await b.goto(urlFor(roomId));
       await bridgeReady(b);
 
+      await enableSyncPlayback(a);
+
       await a.click('button.play');
       await expect.poll(() => playLabel(b)).toMatch(/stop/i);
 
       // B stops — local press wins, A should follow.
       await b.click('button.play');
       await expect.poll(() => playLabel(a)).toMatch(/play/i);
+    } finally {
+      await ctxA.close();
+      await ctxB.close();
+    }
+  });
+
+  collabTest('by default peers play independently (synced playback off)', async ({ browser, urlFor }) => {
+    collabTest.setTimeout(20_000);
+    const roomId = `ind-${Math.random().toString(36).slice(2, 8)}`;
+    const { ctx: ctxA, page: a } = await makeContext(browser, { name: 'Alice', color: '#ff8a3d' });
+    const { ctx: ctxB, page: b } = await makeContext(browser, { name: 'Bob', color: '#06d6a0' });
+    try {
+      await a.goto(urlFor(roomId));
+      await bridgeReady(a);
+      await b.goto(urlFor(roomId));
+      await bridgeReady(b);
+      expect(await playLabel(a)).toMatch(/play/i);
+      expect(await playLabel(b)).toMatch(/play/i);
+
+      // A presses Play — without opting into synced playback, B must
+      // NOT follow.
+      await a.click('button.play');
+      await expect.poll(() => playLabel(a)).toMatch(/stop/i);
+      // Give any (erroneous) broadcast time to land, then assert B is
+      // still stopped.
+      await b.waitForTimeout(1500);
+      expect(await playLabel(b)).toMatch(/play/i);
     } finally {
       await ctxA.close();
       await ctxB.close();
