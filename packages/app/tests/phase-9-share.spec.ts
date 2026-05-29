@@ -282,4 +282,82 @@ collabTest.describe('phase-9 M5 — share & join', () => {
       await ctxA.close();
     }
   });
+
+  // Phase-10 P6 — a read-only viewer cannot import audio. The owner
+  // shares a project that already contains an audio track; the viewer
+  // adopts it, selects it, and finds the Import… button disabled. A
+  // programmatically dispatched drop bypasses the canvas's
+  // pointer-events:none (CSS doesn't stop dispatchEvent), so this also
+  // proves the explicit `canEdit` guard in the drop handler — not just
+  // the CSS lock — keeps a viewer from writing a region.
+  collabTest('a read-only viewer cannot import audio onto a shared track', async ({ browser, syncBase }) => {
+    collabTest.setTimeout(30_000);
+    const { ctx: ctxA, page: a } = await makeContext(browser);
+    try {
+      await a.goto(`/?syncBase=${encodeURIComponent(syncBase)}`);
+      await bridgeReady(a);
+      await a.click('[data-testid="share-button"]');
+      await a.click('[data-testid="share-start-session"]');
+      await expect
+        .poll(() => a.evaluate(() => (window as any).__bridge.collabPermissions().ownerId))
+        .not.toBeNull();
+      await a.click('[data-testid="share-export-close"]');
+
+      // Owner adds an audio track (synced) — it lands at index 1 after
+      // the default synth track.
+      await a.click('[data-testid="add-audio-track"]');
+      const audioIdx = await a.evaluate(() => (window as any).__project.trackCount - 1);
+      const roomId = await a.evaluate(() => new URLSearchParams(location.search).get('room'));
+
+      const { ctx: ctxB, page: b } = await makeContext(browser);
+      try {
+        await b.goto(`/?room=${roomId}&syncBase=${encodeURIComponent(syncBase)}`);
+        await bridgeReady(b);
+        await expect(b.locator('[data-testid="viewonly-banner"]')).toBeVisible();
+
+        // Viewer adopts the synced audio track and selects it (selection
+        // is local view state, allowed for viewers).
+        await expect
+          .poll(() => b.evaluate(() => (window as any).__project.trackCount))
+          .toBeGreaterThan(audioIdx);
+        await b.click(`[data-testid="track-row-${audioIdx}"]`);
+
+        // The Import… button is disabled for the viewer.
+        await expect(b.locator(`[data-testid="audio-track-${audioIdx}-import"]`)).toBeDisabled();
+
+        // Dispatch a real drop with a WAV file — the canEdit guard must
+        // drop it on the floor: no region is created.
+        await b.evaluate((idx) => {
+          const sr = 48_000, frames = Math.round(0.3 * sr), dataLen = frames * 2;
+          const ab = new ArrayBuffer(44 + dataLen);
+          const dv = new DataView(ab); let p = 0;
+          const wStr = (s: string) => { for (const c of s) dv.setUint8(p++, c.charCodeAt(0)); };
+          const wU32 = (v: number) => { dv.setUint32(p, v, true); p += 4; };
+          const wU16 = (v: number) => { dv.setUint16(p, v, true); p += 2; };
+          wStr('RIFF'); wU32(36 + dataLen); wStr('WAVE'); wStr('fmt ');
+          wU32(16); wU16(1); wU16(1); wU32(sr); wU32(sr * 2); wU16(2); wU16(16);
+          wStr('data'); wU32(dataLen);
+          for (let i = 0; i < frames; i++) dv.setInt16(p + i * 2, 1000, true);
+          const file = new File([new Uint8Array(ab)], 'sneak.wav', { type: 'audio/wav' });
+          const dt = new DataTransfer(); dt.items.add(file);
+          const section = document.querySelector(`[data-testid="audio-track-${idx}"]`)!;
+          const rect = section.getBoundingClientRect();
+          const init: DragEventInit = {
+            bubbles: true, cancelable: true, dataTransfer: dt,
+            clientX: rect.left + 80, clientY: rect.top + rect.height / 2,
+          };
+          section.dispatchEvent(new DragEvent('dragover', init));
+          section.dispatchEvent(new DragEvent('drop', init));
+        }, audioIdx);
+
+        // Give any (incorrect) import a chance to land, then confirm none did.
+        await b.waitForTimeout(500);
+        expect(await b.evaluate((i) => (window as any).__bridge.getAudioRegions(i).length, audioIdx)).toBe(0);
+      } finally {
+        await ctxB.close();
+      }
+    } finally {
+      await ctxA.close();
+    }
+  });
 });

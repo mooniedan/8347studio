@@ -32,6 +32,7 @@ import {
   addWasmInsert,
   addAudioRegion,
   getAudioRegions,
+  getAssetMetadata,
   setAudioRegionFade,
   setAudioRegionGain,
   updateAudioRegion,
@@ -310,6 +311,8 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
     importAssetIntoTrack: deps.importAssetIntoTrack,
     getAudioRegions: (trackIdx: number) =>
       withProject(deps, (p) => getAudioRegions(p, trackIdx), []),
+    getAssetMetadata: (hash: string) =>
+      withProject(deps, (p) => getAssetMetadata(p, hash), null),
     addAudioRegion: (trackIdx: number, region: AudioRegionInput) =>
       withProject(deps, (p) => { addAudioRegion(p, trackIdx, region); return true; }, false),
     setAudioRegionFade: (

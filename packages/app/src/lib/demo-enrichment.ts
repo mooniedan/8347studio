@@ -6,13 +6,15 @@
 // instead. App.svelte awaits `enrichDemoSong` after the seed so the
 // asynchronous additions land before the dirty-watcher arms.
 //
-// Two enrichments today:
+// Three enrichments today:
 //   1. Bitcrusher WASM plugin loaded as an insert on the Bass track,
 //      with a mix-sweep automation lane (Phase-8 M6 coverage).
 //   2. A synth-generated 2 s pad-riser dropped onto a fresh Audio
 //      track (Phase-5 audio path coverage; Phase-10 M1 closeout).
+//   3. The real `bell.wav` (44.1 kHz) imported onto a "Bell" Audio
+//      track (Phase-10 P6 — exercises decoding a real on-disk file).
 //
-// Both are exercised by the demo-song spec — see
+// All are exercised by the demo-song spec — see
 // `packages/app/tests/demo-song.spec.ts`.
 
 import {
@@ -23,6 +25,8 @@ import {
   setInsertParam,
   setTrackColor,
   setTrackGain,
+  getAssetMetadata,
+  getAudioRegions,
   type Project,
 } from './project';
 import { TRACK_PALETTE } from './track-color';
@@ -50,6 +54,7 @@ export async function enrichDemoSong(
 ): Promise<void> {
   await enrichWithBitcrusher(project, deps);
   await enrichWithAudioRiser(project, deps);
+  await enrichWithBellSample(project, deps);
 }
 
 /// Phase-8 M6 — bitcrusher on the demo's bass track with a wet
@@ -124,6 +129,40 @@ async function enrichWithAudioRiser(
   // duration in seconds.
   setAudioRegionFade(project, audioIdx, 0, 'in',  Math.round(0.25 * 48_000));
   setAudioRegionFade(project, audioIdx, 0, 'out', Math.round(0.50 * 48_000));
+}
+
+/// Phase-10 P6 — drop the real `bell.wav` (44.1 kHz, served from
+/// /demo-assets) onto its own Audio track, alongside the synth riser.
+/// Proves the cumulative demo decodes a real on-disk file, not just a
+/// generated buffer. Failures are non-fatal — the riser still carries
+/// the audio path if the fetch is blocked.
+async function enrichWithBellSample(
+  project: Project,
+  deps: DemoEnrichmentDeps,
+): Promise<void> {
+  addAudioTrack(project, 'Bell');
+  const audioIdx = project.tracks.length - 1;
+  let hash: string;
+  try {
+    const res = await fetch('/demo-assets/bell.wav');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    ({ hash } = await deps.importAssetIntoTrack(audioIdx, bytes, 'bell.wav'));
+  } catch (err) {
+    console.warn('demo bell import failed:', err);
+    return;
+  }
+  setTrackGain(project, audioIdx, 0.7);
+  setTrackColor(project, audioIdx, TRACK_PALETTE[4]); // distinct from the riser
+
+  // Fades derived from the asset's *real* sample rate (bell.wav is
+  // 44.1 kHz, not the engine's 48 kHz default) — see the no-hard-coded-
+  // sample-rate rule. Skip silently if metadata isn't ready.
+  const sr = getAssetMetadata(project, hash)?.sampleRate;
+  if (sr && getAudioRegions(project, audioIdx).length > 0) {
+    setAudioRegionFade(project, audioIdx, 0, 'in',  Math.round(0.05 * sr));
+    setAudioRegionFade(project, audioIdx, 0, 'out', Math.round(0.30 * sr));
+  }
 }
 
 /// Generate a 2 s 48 kHz mono pad-riser WAV (RIFF + 16-bit PCM).

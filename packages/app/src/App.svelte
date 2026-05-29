@@ -323,15 +323,19 @@
     return importAssetIntoTrack(trackIdx, bytes, `recording-${stamp}.wav`);
   }
 
-  /// Phase-5 M3: import an audio asset into the addressed Audio track
-  /// at tick 0 (full sample length). Hash to OPFS, decode, drop a
-  /// region on the track. Engine-bridge picks up the new region via
-  /// trackById.observeDeep, registers the asset, posts the snapshot.
+  /// Phase-5 M3: import an audio asset into the addressed Audio track.
+  /// Hash to OPFS, decode, drop a region on the track at `startTick`
+  /// (defaults to 0 for the recording + demo-song callers). Engine-
+  /// bridge picks up the new region via trackById.observeDeep,
+  /// registers the asset, posts the snapshot. Returns the hash plus
+  /// the region's tick length so callers laying out multiple imports
+  /// (drag-drop / picker) can advance the cursor without overlap.
   async function importAssetIntoTrack(
     trackIdx: number,
     bytes: Uint8Array,
     filename: string,
-  ): Promise<{ hash: string }> {
+    startTick = 0,
+  ): Promise<{ hash: string; lengthTicks: number }> {
     if (!project) throw new Error('project not ready');
     const hash = await assetStore.putBytes(bytes);
     const ctx = await audio.audioContext();
@@ -349,14 +353,61 @@
     const lengthTicks = Math.max(1, Math.round(seconds * ticksPerSec));
     addAudioRegion(project, trackIdx, {
       assetHash: hash,
-      startTick: 0,
+      startTick: Math.max(0, Math.round(startTick)),
       lengthTicks,
       startSample: 0,
       lengthSamples: decoded.frames,
       assetOffsetSamples: 0,
       gain: 1.0,
     });
-    return { hash };
+    return { hash, lengthTicks };
+  }
+
+  /// Phase-10 P6 — user-facing audio import (drag-drop onto a track, or
+  /// the track's Import… button). Filters to audio files, then imports
+  /// each sequentially starting at `atTick`, advancing by the prior
+  /// region's tick length so a multi-file drop lays out left-to-right
+  /// without overlap. Decode failures (unsupported / corrupt) surface
+  /// on `audioImportError` instead of failing silently.
+  const AUDIO_EXTS = /\.(wav|mp3|flac|ogg|m4a|aac)$/i;
+  let audioImportError = $state<string | null>(null);
+  let audioImportErrorTimer: ReturnType<typeof setTimeout> | null = null;
+  function flashAudioImportError(msg: string) {
+    audioImportError = msg;
+    if (audioImportErrorTimer) clearTimeout(audioImportErrorTimer);
+    audioImportErrorTimer = setTimeout(() => { audioImportError = null; }, 5000);
+  }
+  async function handleImportAudioFiles(
+    trackIdx: number,
+    files: File[],
+    atTick: number,
+  ): Promise<void> {
+    if (!canEdit) return;
+    const audioFiles = files.filter(
+      (f) => f.type.startsWith('audio/') || AUDIO_EXTS.test(f.name),
+    );
+    const rejected = files.length - audioFiles.length;
+    if (audioFiles.length === 0) {
+      flashAudioImportError(
+        rejected > 0 ? 'Not an audio file — drop a WAV / MP3 / FLAC / OGG.' : 'No file to import.',
+      );
+      return;
+    }
+    audioImportError = null;
+    let cursor = Math.max(0, Math.round(atTick));
+    for (const file of audioFiles) {
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const { lengthTicks } = await importAssetIntoTrack(trackIdx, bytes, file.name, cursor);
+        cursor += lengthTicks;
+      } catch (err) {
+        console.warn('audio import failed:', file.name, err);
+        flashAudioImportError(`Couldn't import "${file.name}" — unsupported or corrupt audio.`);
+      }
+    }
+    if (rejected > 0 && audioFiles.length > 0) {
+      flashAudioImportError(`Skipped ${rejected} non-audio file${rejected > 1 ? 's' : ''}.`);
+    }
   }
 
   let midi: MidiInputController | null = null;
@@ -1326,11 +1377,14 @@
               <AudioTrackView
                 {project}
                 trackIdx={selectedTrackIdx}
+                canEdit={canEdit}
                 armed={isAudioTrackArmed}
                 recording={audioRecordingTrackIdx === selectedTrackIdx}
                 recordingStartedAtMs={audioRecordingTrackIdx === selectedTrackIdx ? audioRecordingStartedAtMs : null}
                 inputLabel={audioRecordingTrackIdx === selectedTrackIdx ? audioRecordingInputLabel : null}
+                importError={audioImportError}
                 onToggleRecord={() => toggleAudioRecord(selectedTrackIdx)}
+                onImportFiles={(files, atTick) => handleImportAudioFiles(selectedTrackIdx, files, atTick)}
               />
               <AutomationLanes {project} trackIdx={selectedTrackIdx} />
               <InsertSlots {project} trackIdx={selectedTrackIdx} />

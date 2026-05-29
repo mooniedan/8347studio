@@ -184,6 +184,28 @@ test.describe('demo song', () => {
     expect(riserRegion!.fadeInSamples).toBeGreaterThan(0);
     expect(riserRegion!.fadeOutSamples).toBeGreaterThan(0);
 
+    // Phase-10 P6 — the demo also imports the real `bell.wav` on a
+    // "Bell" track, so the cumulative regression decodes a real on-disk
+    // file alongside the synth riser. The asset's sourceFilename is only
+    // recorded after a successful decode, so matching it proves the WAV
+    // actually decoded (sampleRate would just be the decode-context rate
+    // since decodeAudioData resamples — not a useful identity check).
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as unknown as {
+        __bridge: {
+          inspectTracks: () => { name: string }[];
+          getAudioRegions: (i: number) => { assetHash: string }[];
+          getAssetMetadata: (h: string) => { sourceFilename: string | null } | null;
+        };
+      };
+      const tracks = w.__bridge.inspectTracks();
+      const bellIdx = tracks.findIndex((t) => /bell/i.test(t.name));
+      if (bellIdx < 0) return null;
+      const region = w.__bridge.getAudioRegions(bellIdx)[0];
+      if (!region) return null;
+      return w.__bridge.getAssetMetadata(region.assetHash)?.sourceFilename ?? null;
+    }), { timeout: 5_000 }).toBe('bell.wav');
+
     // Automation lane present on track 0.
     expect(await automationLaneCount(page)).toBeGreaterThanOrEqual(1);
 

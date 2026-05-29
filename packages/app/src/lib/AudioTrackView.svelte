@@ -18,14 +18,22 @@
   const {
     project,
     trackIdx,
+    canEdit = true,
     recording = false,
     armed = false,
     recordingStartedAtMs = null,
     inputLabel = null,
+    importError = null,
     onToggleRecord = () => {},
+    onImportFiles = () => {},
   }: {
     project: Project;
     trackIdx: number;
+    /// Phase-11 collab read-only lock. When false the Import button is
+    /// disabled and drag-drop imports are ignored (the canvas is also
+    /// pointer-events:none for viewers, but we gate explicitly so the
+    /// read-only contract doesn't lean on CSS alone).
+    canEdit?: boolean;
     recording?: boolean;
     /// Phase-10 M5 — track is armed for the next take (Y.Doc-backed
     /// armedTrackId == this trackId). Drives the warm pulse glow.
@@ -36,7 +44,12 @@
     /// Live-input label from `MediaStreamTrack.label` — used as the
     /// "● REC from <device>" header during the take.
     inputLabel?: string | null;
+    /// Transient import-failure message surfaced in the header.
+    importError?: string | null;
     onToggleRecord?: () => void;
+    /// Phase-10 P6 — hand dropped/picked files up to App, which routes
+    /// them through importAssetIntoTrack at `atTick`.
+    onImportFiles?: (files: File[], atTick: number) => void;
   } = $props();
 
   let regions = $state<AudioRegionView[]>(untrack(() => getAudioRegions(project, trackIdx)));
@@ -313,13 +326,87 @@
     }
     return Math.max(8, baseLengthTicks * PX_PER_TICK);
   }
+
+  /// Phase-10 P6 — audio-clip import (drag-drop + Import… button).
+  ///
+  /// Both entry points hand File[] up to `onImportFiles(files, atTick)`;
+  /// the parent (App) does the OPFS hash + decode + region creation.
+  /// We only own *where* the clip lands:
+  ///   - drop → the tick under the cursor, snapped to the 1/16 grid.
+  ///   - picker → appended after the last region (`nextFreeTick`).
+  let timelineEl = $state<HTMLDivElement | null>(null);
+  let importInput = $state<HTMLInputElement | null>(null);
+  let dragOver = $state(false);
+
+  /// End of the last region (or the live take), so picker imports
+  /// don't stack on tick 0. Mirrors `recPlaceholderStartTick`.
+  function nextFreeTick(): number {
+    let end = 0;
+    for (const r of regions) {
+      if (r.startTick + r.lengthTicks > end) end = r.startTick + r.lengthTicks;
+    }
+    return end;
+  }
+
+  /// Tick under the drop point. `getBoundingClientRect()` already folds
+  /// in the timeline's horizontal scroll, so clientX − rect.left is the
+  /// content-space offset. Empty tracks (no timeline yet) drop at 0.
+  function dropTickFromEvent(e: DragEvent): number {
+    if (!timelineEl) return 0;
+    const rect = timelineEl.getBoundingClientRect();
+    const dxTicks = (e.clientX - rect.left) / PX_PER_TICK;
+    return Math.max(0, snapTicks(dxTicks));
+  }
+
+  function dragHasFiles(e: DragEvent): boolean {
+    const types = e.dataTransfer?.types;
+    return !!types && Array.from(types).includes('Files');
+  }
+
+  function onDragOver(e: DragEvent) {
+    if (!canEdit || !dragHasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    dragOver = true;
+  }
+
+  function onDragLeave(e: DragEvent) {
+    // Ignore leave events that bubble from children — only clear when
+    // the pointer actually exits the section.
+    const next = e.relatedTarget as Node | null;
+    const self = e.currentTarget as HTMLElement;
+    if (next && self.contains(next)) return;
+    dragOver = false;
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    dragOver = false;
+    if (!canEdit) return;
+    const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
+    if (files.length === 0) return;
+    onImportFiles(files, dropTickFromEvent(e));
+  }
+
+  function onPickFiles(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = input.files ? Array.from(input.files) : [];
+    if (files.length > 0) onImportFiles(files, nextFreeTick());
+    input.value = ''; // allow re-picking the same file
+  }
 </script>
 
 <section
   class="audio-track"
   class:armed={armed && !recording}
   class:recording={recording}
+  class:drag-over={dragOver}
   data-testid={`audio-track-${trackIdx}`}
+  ondragover={onDragOver}
+  ondragenter={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+  role="presentation"
 >
   <header class="head">
     <span class="title">Audio Track</span>
@@ -334,6 +421,22 @@
       <span class="record-dot"></span>
       {recording ? 'Stop' : 'Record'}
     </button>
+    <button
+      class="import"
+      data-testid={`audio-track-${trackIdx}-import`}
+      onclick={() => importInput?.click()}
+      disabled={!canEdit}
+      title="Import an audio file (WAV / MP3 / FLAC / OGG)"
+    >⬆ Import…</button>
+    <input
+      bind:this={importInput}
+      type="file"
+      accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac"
+      multiple
+      data-testid={`audio-track-${trackIdx}-import-input`}
+      style="display:none"
+      onchange={onPickFiles}
+    />
     {#if recording && inputLabel}
       <span class="input-label" data-testid={`audio-track-${trackIdx}-input-label`}>
         ● REC from <span class="dev">{inputLabel}</span>
@@ -342,16 +445,27 @@
       <span class="armed-pill" data-testid={`audio-track-${trackIdx}-armed-pill`}>
         ARMED
       </span>
+    {:else if importError}
+      <span class="import-error" data-testid={`audio-track-${trackIdx}-import-error`}>
+        {importError}
+      </span>
     {:else}
       <span class="hint">Drag a WAV / MP3 file in to import, or hit Record.</span>
     {/if}
   </header>
+
+  {#if dragOver}
+    <div class="dropzone" data-testid={`audio-track-${trackIdx}-dropzone`}>
+      Drop audio to import
+    </div>
+  {/if}
 
   {#if regions.length === 0 && !recording}
     <div class="empty" data-testid={`audio-track-${trackIdx}-empty`}>No regions yet.</div>
   {:else}
     <div class="timeline-wrap">
       <div
+        bind:this={timelineEl}
         class="timeline"
         style="width: {timelineWidthPx}px;"
         data-testid={`audio-timeline-${trackIdx}`}
@@ -556,6 +670,7 @@
 
 <style>
   .audio-track {
+    position: relative;
     background: #131313;
     border: 1px solid #2a2a2a;
     color: #ccc;
@@ -618,6 +733,47 @@
   .hint {
     color: #666;
     font-size: 10px;
+  }
+  .import-error {
+    color: #ff8585;
+    font-size: 10px;
+  }
+  .import {
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 3px 8px;
+    font: 11px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .import:hover:not(:disabled) {
+    background: #232323;
+  }
+  .import:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* Phase-10 P6 — drag-drop import affordance. The section gets an accent
+     dashed border while a file is over it; a centered overlay spells
+     out the action. The overlay is pointer-events:none so it never
+     swallows the drop. */
+  .audio-track.drag-over {
+    border-color: #7ad7ff;
+    box-shadow: 0 0 0 1px rgba(122, 215, 255, 0.4);
+  }
+  .dropzone {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(122, 215, 255, 0.08);
+    border: 2px dashed #7ad7ff;
+    color: #aee4ff;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    z-index: 5;
   }
   .record {
     display: inline-flex;
