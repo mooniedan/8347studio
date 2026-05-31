@@ -67,6 +67,7 @@
     getArmedTrackIdx,
     getPianoRollClipForTrack,
     getStepSeqClipForTrack,
+    createClipAtTick,
     addPianoRollNote,
     readPianoRollNotes,
     readStepVelocities,
@@ -204,6 +205,10 @@
   // (Sequencer / PianoRoll / AudioTrackView); 'arrange' = the all-tracks
   // ArrangementView timeline.
   let viewMode = $state<'track' | 'arrange'>('track');
+  // Phase-12 M5a — which pattern the per-track editor opens, per track.
+  // Set by arrangement drill-in / empty-lane create; undefined falls
+  // back to the track's first clip (legacy single-pattern behaviour).
+  let activePatternByTrack = $state<Record<number, string | undefined>>({});
   let activeProjectId = $state<string | null>(null);
   // Active project's IDB docName — the key for version checkpoints (M5).
   let currentDocName = $state('');
@@ -1400,7 +1405,19 @@
               canEdit={canEdit}
               selectedTrackIdx={selectedTrackIdx}
               onSelectTrack={(i) => (selectedTrackIdx = i)}
-              onDrillIn={(i) => { selectedTrackIdx = i; viewMode = 'track'; }}
+              onDrillIn={(i, patternId) => {
+                selectedTrackIdx = i;
+                activePatternByTrack[i] = patternId;
+                viewMode = 'track';
+              }}
+              onCreateAt={(i, tick) => {
+                if (!project) return;
+                const r = createClipAtTick(project, i, tick);
+                if (r) {
+                  selectedTrackIdx = i;
+                  activePatternByTrack[i] = r.patternId;
+                }
+              }}
               playheadTick={publishedPlayheadTick}
             />
           {:else if selectedTrackKind === 'Audio'}
@@ -1423,7 +1440,7 @@
             </div>
           {:else if selectedPluginId === 'builtin:subtractive' || selectedPluginId === 'builtin:drumkit'}
             <div class="synth-stack">
-              <PianoRoll {project} trackIdx={selectedTrackIdx} collab={session.collab} />
+              <PianoRoll {project} trackIdx={selectedTrackIdx} collab={session.collab} clipId={activePatternByTrack[selectedTrackIdx]} />
               <AutomationLanes {project} trackIdx={selectedTrackIdx} />
               <PluginPanel
                 {project}
@@ -1438,7 +1455,7 @@
             </div>
           {:else}
             <div class="track-view">
-              <Sequencer {project} trackIdx={selectedTrackIdx} />
+              <Sequencer {project} trackIdx={selectedTrackIdx} clipId={activePatternByTrack[selectedTrackIdx]} />
               <AutomationLanes {project} trackIdx={selectedTrackIdx} />
               <InsertSlots {project} trackIdx={selectedTrackIdx} />
               <SendList {project} trackIdx={selectedTrackIdx} />

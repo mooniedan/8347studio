@@ -6,6 +6,7 @@
     STEPS_PER_CLIP,
     WAVEFORMS,
     getStepSeqClipForTrack,
+    getClipById,
     readSteps,
     readStepVelocities,
     writeStepNotes,
@@ -22,7 +23,19 @@
   const {
     project,
     trackIdx,
-  }: { project: Project; trackIdx: number } = $props();
+    clipId = undefined,
+  }: { project: Project; trackIdx: number; clipId?: string } = $props();
+
+  /// The pattern this editor edits: the drilled-in `clipId` when given
+  /// (validated to a StepSeq clip), else the track's first step clip.
+  /// Identical to the legacy behaviour when `clipId` is undefined.
+  function activeStepClip() {
+    if (clipId) {
+      const c = getClipById(project, clipId);
+      if (c && c.get('kind') === 'StepSeq') return c;
+    }
+    return getStepSeqClipForTrack(project, trackIdx);
+  }
 
   const HIGH = 72; // C5 inclusive
   const NOTES = HIGH - LOW_MIDI + 1; // 25 rows
@@ -47,18 +60,18 @@
   let playhead = $state(-1);
 
   function readClipSteps(): number[] {
-    const clip = getStepSeqClipForTrack(project, trackIdx);
+    const clip = activeStepClip();
     return clip ? readSteps(clip) : Array<number>(STEPS_PER_CLIP).fill(0);
   }
   function readClipVelocities(): number[] {
-    const clip = getStepSeqClipForTrack(project, trackIdx);
+    const clip = activeStepClip();
     return clip ? readStepVelocities(clip) : Array<number>(STEPS_PER_CLIP).fill(100);
   }
 
   // (Re-)attach observers whenever the visible track changes.
   $effect(() => {
     const idx = trackIdx;
-    const clip = getStepSeqClipForTrack(project, idx);
+    const clip = activeStepClip();
     if (!clip) return;
     steps = readSteps(clip);
     velocities = readStepVelocities(clip);
@@ -91,7 +104,7 @@
   });
 
   function setCell(col: number, midi: number) {
-    const clip = getStepSeqClipForTrack(project, trackIdx);
+    const clip = activeStepClip();
     if (!clip) return;
     const next = (steps[col] ^ bitFor(midi)) >>> 0;
     writeStepNotes(clip, col, next);
@@ -102,7 +115,7 @@
   // the cell and `move` updates the value live; `up` releases capture
   // so the next click on a different cell starts a fresh drag.
   function setVelocity(col: number, value: number) {
-    const clip = getStepSeqClipForTrack(project, trackIdx);
+    const clip = activeStepClip();
     if (!clip) return;
     writeStepVelocity(clip, col, value);
   }
@@ -131,12 +144,12 @@
   }
 
   function onClear() {
-    const clip = getStepSeqClipForTrack(project, trackIdx);
+    const clip = activeStepClip();
     if (!clip) return;
     clearStepSeqClip(project, clip);
   }
   function onRandomize() {
-    const clip = getStepSeqClipForTrack(project, trackIdx);
+    const clip = activeStepClip();
     if (!clip) return;
     randomizeStepSeqClip(project, clip);
   }

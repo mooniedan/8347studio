@@ -8,6 +8,7 @@
     type Project,
     type PianoRollNote,
     getPianoRollClipForTrack,
+    getClipById,
     getTrackPluginId,
     readPianoRollNotes,
     addPianoRollNote,
@@ -21,6 +22,7 @@
     project,
     trackIdx,
     collab = null,
+    clipId = undefined,
   }: {
     project: Project;
     trackIdx: number;
@@ -28,7 +30,20 @@
     /// `pianoCell` so peers see a ghost cell on the same coordinate;
     /// peers' cells render as colored borders below.
     collab?: CollabState | null;
+    /// Phase-12 M5a — the drilled-in pattern to edit. Falls back to the
+    /// track's first PianoRoll clip (legacy behaviour) when absent.
+    clipId?: string;
   } = $props();
+
+  /// The pattern this editor edits — the active `clipId` (validated to a
+  /// PianoRoll clip) or the track's first PianoRoll clip.
+  function activePianoClip() {
+    if (clipId) {
+      const c = getClipById(project, clipId);
+      if (c && c.get('kind') === 'PianoRoll') return c;
+    }
+    return getPianoRollClipForTrack(project, trackIdx);
+  }
 
   /// Color → highlight for peers hovering this track's cells. Other
   /// tracks' peers are ignored so we don't show a phantom highlight
@@ -110,12 +125,12 @@
   let playheadCol = $state(-1);
 
   function snapshotNotes(): PianoRollNote[] {
-    const clip = getPianoRollClipForTrack(project, trackIdx);
+    const clip = activePianoClip();
     return clip ? readPianoRollNotes(clip) : [];
   }
 
   function snapshotClipLength(): number {
-    const clip = getPianoRollClipForTrack(project, trackIdx);
+    const clip = activePianoClip();
     const raw = clip?.get('lengthTicks');
     if (typeof raw === 'number' && raw > 0) return raw;
     return STEPS_PER_CLIP * STEP_TICKS;
@@ -370,7 +385,7 @@
   }
 
   function commitDrag(d: Drag): void {
-    const clip = getPianoRollClipForTrack(project, trackIdx);
+    const clip = activePianoClip();
     if (!clip) return;
 
     // Shift-drag → multi-select. Shift-click on a note → toggle that
@@ -539,7 +554,7 @@
 
   function applyVelDrag(clientY: number) {
     if (!velDrag) return;
-    const clip = getPianoRollClipForTrack(project, trackIdx);
+    const clip = activePianoClip();
     if (!clip) return;
     const v = yToVelocity(clientY, velDrag.lane);
     setPianoRollNoteVelocity(project, clip, velDrag.pitch, velDrag.startTick, v);
@@ -547,7 +562,7 @@
 
   $effect(() => {
     const idx = trackIdx;
-    const clip = getPianoRollClipForTrack(project, idx);
+    const clip = activePianoClip();
     if (!clip) {
       notes = [];
       clipLengthTicks = STEPS_PER_CLIP * STEP_TICKS;
@@ -583,7 +598,7 @@
           return;
         }
       }
-      const clip = getPianoRollClipForTrack(project, trackIdx);
+      const clip = activePianoClip();
       if (!clip) return;
       e.preventDefault();
       const keys = Array.from(selectedNotes);

@@ -18,6 +18,7 @@
     HEADER_WIDTH,
     LANE_HEIGHT,
     RULER_HEIGHT,
+    BAR_TICKS,
     pxToTick,
     snapTicks,
     songTotalTicks,
@@ -31,14 +32,19 @@
     selectedTrackIdx = 0,
     onSelectTrack = () => {},
     onDrillIn = () => {},
+    onCreateAt = () => {},
     playheadTick = 0,
   }: {
     project: Project;
     canEdit?: boolean;
     selectedTrackIdx?: number;
     onSelectTrack?: (idx: number) => void;
-    /// Double-click a block → open the per-track editor for its track.
-    onDrillIn?: (idx: number) => void;
+    /// Double-click a block → open the per-track editor for its track,
+    /// on the block's pattern.
+    onDrillIn?: (idx: number, patternId?: string) => void;
+    /// Double-click an empty MIDI lane → create a new pattern + block at
+    /// the snapped tick.
+    onCreateAt?: (idx: number, tick: number) => void;
     playheadTick?: number;
   } = $props();
 
@@ -48,6 +54,7 @@
     /// audio region (read-only in the arrangement — edited in the
     /// per-track AudioTrackView via drill-in).
     kind: 'block' | 'audio';
+    patternId?: string;
     startTick: number;
     lengthTicks: number;
     label: string;
@@ -79,6 +86,7 @@
         items = listBlocksForTrack(project, t).map((b) => ({
           id: b.id,
           kind: 'block' as const,
+          patternId: b.patternId,
           startTick: b.startTick,
           lengthTicks: b.lengthTicks,
           label: b.kind === 'StepSeq' ? 'Step' : b.kind === 'PianoRoll' ? 'Piano' : 'Block',
@@ -191,6 +199,16 @@
     refresh();
   }
 
+  /// Double-click on the empty part of a MIDI lane creates a new
+  /// pattern + block there. `e.target === e.currentTarget` filters out
+  /// double-clicks that landed on a block (which drill in instead).
+  function onLaneBodyDblClick(e: MouseEvent, lane: Lane) {
+    if (!canEdit || lane.trackKind !== 'MIDI') return;
+    if (e.target !== e.currentTarget) return;
+    const tick = snapTicks(pxToTick((e as MouseEvent & { offsetX: number }).offsetX), BAR_TICKS);
+    onCreateAt(lane.trackIdx, tick);
+  }
+
   function itemGeom(item: LaneItem): { startTick: number; lengthTicks: number } {
     if (preview && preview.blockId === item.id) {
       return { startTick: preview.startTick, lengthTicks: preview.lengthTicks };
@@ -232,7 +250,12 @@
             <span class="stripe" style:background={lane.color}></span>
             <span class="name">{lane.name}</span>
           </button>
-          <div class="lane-body" style:width="{contentWidthPx}px">
+          <div
+            class="lane-body"
+            data-testid="arrange-lane-body-{lane.trackIdx}"
+            style:width="{contentWidthPx}px"
+            ondblclick={(e) => onLaneBodyDblClick(e, lane)}
+          >
             {#each lane.items as item (item.id)}
               {@const g = itemGeom(item)}
               <BlockView
@@ -248,7 +271,7 @@
                 testid={`arrange-block-${lane.trackIdx}-${item.id}`}
                 onPointerDownBody={(e) => startDrag(e, item, 'move')}
                 onPointerDownResize={(e) => startDrag(e, item, 'resize')}
-                onDblClick={() => onDrillIn(lane.trackIdx)}
+                onDblClick={() => onDrillIn(lane.trackIdx, item.patternId)}
               />
             {/each}
           </div>

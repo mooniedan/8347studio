@@ -1529,6 +1529,35 @@ function clonePattern(p: Project, trackId: string, patternId: string): string {
   return '';
 }
 
+/// A pattern (clip) Y.Map by id, or null. Lets the editors open a
+/// *specific* pattern (the drilled-in / active block) instead of the
+/// track's first clip.
+export function getClipById(p: Project, clipId: string): Y.Map<unknown> | null {
+  return p.clipById.get(clipId) ?? null;
+}
+
+/// Create a fresh empty pattern on `trackIdx` (kind inferred from the
+/// track's instrument — oscillator → StepSeq, else PianoRoll) and place
+/// a block of it at `startTick`. Returns the new pattern + block ids, or
+/// null if the track is out of range. Used by empty-lane create.
+export function createClipAtTick(
+  p: Project,
+  trackIdx: number,
+  startTick: number,
+): { patternId: string; blockId: string } | null {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return null;
+  const trackId = p.tracks.get(trackIdx);
+  const pluginId = getTrackPluginId(p, trackIdx);
+  let patternId = '';
+  p.doc.transact(() => {
+    patternId = pluginId === 'builtin:oscillator'
+      ? createStepSeqClip(p, trackId, defaultEmptySteps())
+      : createPianoRollClip(p, trackId);
+  });
+  const blockId = placeBlock(p, trackIdx, patternId, startTick);
+  return { patternId, blockId };
+}
+
 /// Remove a block placement. The underlying pattern stays in the
 /// track's library (it may be referenced by other blocks, and keeping
 /// orphans lets the user re-place it). Returns false if not found.
