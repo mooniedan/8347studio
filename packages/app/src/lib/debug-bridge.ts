@@ -45,6 +45,15 @@ import {
   listMidiBindings,
   type MidiBinding,
   getCollabPermissions,
+  listBlocksForTrack,
+  placeBlock,
+  moveBlock,
+  resizeBlock,
+  duplicateBlock,
+  makeUnique,
+  deleteBlock,
+  readSteps,
+  writeStepNotes,
   getPianoRollClipForTrack,
   getStepSeqClipForTrack,
   getTrackColor,
@@ -252,6 +261,39 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
     /// Phase-11 — collab permission state (owner + granted editors).
     collabPermissions: () =>
       withProject(deps, (p) => getCollabPermissions(p), { ownerId: null, editors: [] as string[] }),
+    /// Phase-12 M1 — pattern/block arrangement model. UI lands in M3+;
+    /// the model + migration are exercised through this surface now.
+    listBlocks: (trackIdx: number) =>
+      withProject(deps, (p) => listBlocksForTrack(p, trackIdx), []),
+    placeBlock: (
+      trackIdx: number,
+      patternId: string,
+      startTick: number,
+      opts?: { lengthTicks?: number; loop?: boolean },
+    ) => withProject(deps, (p) => placeBlock(p, trackIdx, patternId, startTick, opts ?? {}), ''),
+    moveBlock: (blockId: string, newStartTick: number) =>
+      withProject(deps, (p) => moveBlock(p, blockId, newStartTick), false),
+    resizeBlock: (blockId: string, newLengthTicks: number) =>
+      withProject(deps, (p) => resizeBlock(p, blockId, newLengthTicks), false),
+    duplicateBlock: (blockId: string, atStartTick?: number) =>
+      withProject(deps, (p) => duplicateBlock(p, blockId, atStartTick), ''),
+    makeUnique: (blockId: string) =>
+      withProject(deps, (p) => makeUnique(p, blockId), ''),
+    deleteBlock: (blockId: string) =>
+      withProject(deps, (p) => deleteBlock(p, blockId), false),
+    /// Read/write a StepSeq pattern's step mask by pattern id — lets
+    /// the make-unique test prove the fork is a real copy, not an alias.
+    patternStepMask: (patternId: string) => withProject(deps, (p) => {
+      const pattern = p.clipById.get(patternId);
+      return pattern ? readSteps(pattern) : null;
+    }, null),
+    setPatternStepMask: (patternId: string, index: number, notes: number) =>
+      withProject(deps, (p) => {
+        const pattern = p.clipById.get(patternId);
+        if (!pattern) return false;
+        p.doc.transact(() => writeStepNotes(pattern, index, notes));
+        return true;
+      }, false),
     /// Phase-8 M1 — pure manifest validator. Safe to expose.
     parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
     /// Phase-8 M5b — inject a manifest into `meta.installedPlugins`

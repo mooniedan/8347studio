@@ -118,6 +118,12 @@ export async function createProject(opts: CreateProjectOptions = {}): Promise<Pr
     healMissingLoopRegion(project);
   }
 
+  // Phase-12 M1 — back-fill the pattern/block placement layer. Runs on
+  // every path (fresh defaults, demo seed, loaded-from-IDB) and is
+  // idempotent, so freshly-seeded clips and pre-model projects alike
+  // end up with one block per clip.
+  healMissingBlocks(project);
+
   return project;
 }
 
@@ -182,6 +188,7 @@ export function addMidiTrack(p: Project, waveform: Waveform = 'sine'): string {
     const r = createMidiTrack(p, waveform);
     trackId = r.trackId;
     createStepSeqClip(p, r.trackId, defaultEmptySteps());
+    ensureBlocksForTrack(p, p.tracks.length - 1);
   });
   return trackId;
 }
@@ -217,6 +224,7 @@ export function addSubtractiveTrack(p: Project): string {
     p.trackById.set(id, track);
     p.tracks.push([id]);
     createPianoRollClip(p, id);
+    ensureBlocksForTrack(p, p.tracks.length - 1);
     trackId = id;
   });
   return trackId;
@@ -257,6 +265,7 @@ export function addDrumkitTrack(p: Project, name?: string): string {
     p.trackById.set(id, track);
     p.tracks.push([id]);
     createPianoRollClip(p, id);
+    ensureBlocksForTrack(p, p.tracks.length - 1);
     trackId = id;
   });
   return trackId;
@@ -1296,6 +1305,265 @@ export function getTrackName(p: Project, idx: number): string {
   const id = p.tracks.get(idx);
   const track = p.trackById.get(id);
   return ((track?.get('name') as string | undefined) ?? '');
+}
+
+// ---- Arrangement: patterns & blocks (Phase-12 M1) ------------------------
+//
+// A PATTERN is reusable musical content owned by one track — today's
+// "clip" Y.Map in `clipById`. A BLOCK is a *placement* of a pattern on a
+// track's arrangement lane:
+//   { id, patternId, startTick, lengthTicks, loop }
+// stored in `track.blocks: Y.Array<Y.Map>`. `track.clips` stays the
+// per-track pattern library. A block has its own length and (when
+// `loop`) repeats its pattern to fill it — the engine honours that in
+// M2; M1 is purely the data model + migration.
+//
+// Schema decision (resolved during M1): Option A — clip becomes the
+// pattern; blocks carry placement. The model is additive in M1: no
+// reader consumes `track.blocks` yet, so `clip.startTick` stays the
+// reader-facing position through the transition. M2 (engine) and M3+
+// (UI) migrate readers onto blocks; only then is `clip.startTick`
+// retired. Until then every clip has exactly one block mirroring it, so
+// the two positions can't diverge.
+//
+// Audio tracks are intentionally excluded: they keep their direct
+// `audioRegions` placements (a sample region isn't a repeatable
+// pattern). Blocks are a MIDI-track concept.
+
+export interface BlockView {
+  id: string;
+  patternId: string;
+  /// Pattern kind — 'StepSeq' | 'PianoRoll'. 'unknown' if the pattern
+  /// was deleted out from under the block (shouldn't happen in M1).
+  kind: string;
+  startTick: number;
+  lengthTicks: number;
+  loop: boolean;
+}
+
+/// The track's blocks array, creating it if absent. MUST be called
+/// inside a `p.doc.transact` (it can mutate the track Y.Map).
+function ensureTrackBlocks(track: Y.Map<unknown>): Y.Array<Y.Map<unknown>> {
+  let arr = track.get('blocks') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr) {
+    arr = new Y.Array<Y.Map<unknown>>();
+    track.set('blocks', arr);
+  }
+  return arr;
+}
+
+/// Locate a block by id across all tracks. Blocks are addressed by a
+/// stable generated id so move/resize/delete don't depend on array
+/// position (which collab reordering could shift).
+function findBlock(
+  p: Project,
+  blockId: string,
+): { trackId: string; track: Y.Map<unknown>; arr: Y.Array<Y.Map<unknown>>; idx: number; block: Y.Map<unknown> } | null {
+  for (const trackId of p.tracks.toArray()) {
+    const track = p.trackById.get(trackId);
+    const arr = track?.get('blocks') as Y.Array<Y.Map<unknown>> | undefined;
+    if (!track || !arr) continue;
+    for (let i = 0; i < arr.length; i++) {
+      const block = arr.get(i);
+      if (block?.get('id') === blockId) return { trackId, track, arr, idx: i, block };
+    }
+  }
+  return null;
+}
+
+/// All blocks placed on a track's arrangement lane, in array order.
+export function listBlocksForTrack(p: Project, trackIdx: number): BlockView[] {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return [];
+  const track = p.trackById.get(p.tracks.get(trackIdx));
+  const arr = track?.get('blocks') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!arr) return [];
+  return arr.toArray().map((block) => {
+    const patternId = (block.get('patternId') as string) ?? '';
+    const pattern = p.clipById.get(patternId);
+    return {
+      id: (block.get('id') as string) ?? '',
+      patternId,
+      kind: (pattern?.get('kind') as string) ?? 'unknown',
+      startTick: (block.get('startTick') as number) ?? 0,
+      lengthTicks: (block.get('lengthTicks') as number) ?? 0,
+      loop: (block.get('loop') as boolean) ?? true,
+    };
+  });
+}
+
+/// A pattern's natural length — the period the engine loops over when a
+/// block is loop-to-fill. Falls back to one default clip length.
+function patternNaturalLength(p: Project, patternId: string): number {
+  const pattern = p.clipById.get(patternId);
+  const len = pattern?.get('lengthTicks') as number | undefined;
+  return len && len > 0 ? len : STEPS_PER_CLIP * STEP_TICKS;
+}
+
+/// Place a new block of `patternId` on track `trackIdx`. Defaults the
+/// block length to the pattern's natural length and `loop` on (the
+/// drum-machine default). Returns the new block id.
+export function placeBlock(
+  p: Project,
+  trackIdx: number,
+  patternId: string,
+  startTick: number,
+  opts: { lengthTicks?: number; loop?: boolean } = {},
+): string {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return '';
+  const track = p.trackById.get(p.tracks.get(trackIdx));
+  if (!track || !p.clipById.has(patternId)) return '';
+  const id = makeId('block');
+  const len = Math.max(1, Math.floor(opts.lengthTicks ?? patternNaturalLength(p, patternId)));
+  p.doc.transact(() => {
+    const arr = ensureTrackBlocks(track);
+    const block = new Y.Map<unknown>();
+    block.set('id', id);
+    block.set('patternId', patternId);
+    block.set('startTick', Math.max(0, Math.floor(startTick)));
+    block.set('lengthTicks', len);
+    block.set('loop', opts.loop ?? true);
+    arr.push([block]);
+  });
+  return id;
+}
+
+export function moveBlock(p: Project, blockId: string, newStartTick: number): boolean {
+  const f = findBlock(p, blockId);
+  if (!f) return false;
+  p.doc.transact(() => f.block.set('startTick', Math.max(0, Math.floor(newStartTick))));
+  return true;
+}
+
+export function resizeBlock(p: Project, blockId: string, newLengthTicks: number): boolean {
+  const f = findBlock(p, blockId);
+  if (!f) return false;
+  p.doc.transact(() => f.block.set('lengthTicks', Math.max(1, Math.floor(newLengthTicks))));
+  return true;
+}
+
+/// Duplicate a block as a LINKED instance — the copy references the same
+/// pattern, so editing the pattern updates both. Defaults the copy to
+/// sit immediately after the source. Returns the new block id.
+export function duplicateBlock(p: Project, blockId: string, atStartTick?: number): string {
+  const f = findBlock(p, blockId);
+  if (!f) return '';
+  const patternId = f.block.get('patternId') as string;
+  const len = (f.block.get('lengthTicks') as number) ?? patternNaturalLength(p, patternId);
+  const loop = (f.block.get('loop') as boolean) ?? true;
+  const srcStart = (f.block.get('startTick') as number) ?? 0;
+  const start = atStartTick ?? srcStart + len;
+  const id = makeId('block');
+  p.doc.transact(() => {
+    const block = new Y.Map<unknown>();
+    block.set('id', id);
+    block.set('patternId', patternId); // LINKED — shared pattern
+    block.set('startTick', Math.max(0, Math.floor(start)));
+    block.set('lengthTicks', Math.max(1, Math.floor(len)));
+    block.set('loop', loop);
+    f.arr.push([block]);
+  });
+  return id;
+}
+
+/// Fork a block onto a private copy of its pattern, breaking the link.
+/// The block now references the new pattern; edits to either no longer
+/// affect the other. Returns the new pattern id ('' on failure).
+export function makeUnique(p: Project, blockId: string): string {
+  const f = findBlock(p, blockId);
+  if (!f) return '';
+  const oldPatternId = f.block.get('patternId') as string;
+  let newPatternId = '';
+  p.doc.transact(() => {
+    newPatternId = clonePattern(p, f.trackId, oldPatternId);
+    if (newPatternId) f.block.set('patternId', newPatternId);
+  });
+  return newPatternId;
+}
+
+/// Deep-copy a pattern's content into a new pattern owned by `trackId`,
+/// via the clip builders (safer than a naive nested-Y.Array clone).
+/// Returns the new pattern id. MUST run inside a transaction.
+function clonePattern(p: Project, trackId: string, patternId: string): string {
+  const src = p.clipById.get(patternId);
+  if (!src) return '';
+  const kind = src.get('kind');
+  if (kind === 'StepSeq') {
+    const newId = createStepSeqClip(p, trackId, readSteps(src));
+    const dst = p.clipById.get(newId);
+    if (dst) {
+      const vels = readStepVelocities(src);
+      const steps = dst.get('steps') as Y.Array<Y.Map<unknown>>;
+      vels.forEach((v, i) => { if (i < steps.length) steps.get(i).set('velocity', v); });
+      const len = src.get('lengthTicks');
+      if (typeof len === 'number') dst.set('lengthTicks', len);
+    }
+    return newId;
+  }
+  if (kind === 'PianoRoll') {
+    const newId = createPianoRollClip(p, trackId);
+    const dst = p.clipById.get(newId);
+    if (dst) {
+      const notes = dst.get('notes') as Y.Array<Y.Map<unknown>>;
+      for (const n of readPianoRollNotes(src)) {
+        const m = new Y.Map<unknown>();
+        m.set('pitch', n.pitch);
+        m.set('velocity', n.velocity);
+        m.set('startTick', n.startTick);
+        m.set('lengthTicks', n.lengthTicks);
+        notes.push([m]);
+      }
+      const len = src.get('lengthTicks');
+      if (typeof len === 'number') dst.set('lengthTicks', len);
+    }
+    return newId;
+  }
+  return '';
+}
+
+/// Remove a block placement. The underlying pattern stays in the
+/// track's library (it may be referenced by other blocks, and keeping
+/// orphans lets the user re-place it). Returns false if not found.
+export function deleteBlock(p: Project, blockId: string): boolean {
+  const f = findBlock(p, blockId);
+  if (!f) return false;
+  p.doc.transact(() => f.arr.delete(f.idx, 1));
+  return true;
+}
+
+/// Ensure every clip on a MIDI track has at least one block. Idempotent
+/// — a clip already covered by a block is skipped. MUST run inside a
+/// transaction. Used by both the migration heal and runtime track
+/// creation so the blocks layer never lags the clip library.
+function ensureBlocksForTrack(p: Project, trackIdx: number): void {
+  if (trackIdx < 0 || trackIdx >= p.tracks.length) return;
+  const track = p.trackById.get(p.tracks.get(trackIdx));
+  if (!track || track.get('kind') !== 'MIDI') return;
+  const clipIds = track.get('clips') as Y.Array<string> | undefined;
+  if (!clipIds || clipIds.length === 0) return;
+  const arr = ensureTrackBlocks(track);
+  const covered = new Set(arr.toArray().map((b) => b.get('patternId') as string));
+  for (const cid of clipIds.toArray()) {
+    if (covered.has(cid)) continue;
+    const clip = p.clipById.get(cid);
+    if (!clip) continue;
+    const block = new Y.Map<unknown>();
+    block.set('id', makeId('block'));
+    block.set('patternId', cid);
+    block.set('startTick', (clip.get('startTick') as number) ?? 0);
+    block.set('lengthTicks', (clip.get('lengthTicks') as number) ?? (STEPS_PER_CLIP * STEP_TICKS));
+    block.set('loop', true);
+    arr.push([block]);
+  }
+}
+
+/// Migration: back-fill blocks for projects created before the
+/// pattern/block model (every existing clip → one block at its old
+/// startTick). Idempotent; safe to run on every load. Mirrors
+/// `healMissingLoopRegion`'s heal-on-open pattern.
+export function healMissingBlocks(p: Project): void {
+  p.doc.transact(() => {
+    for (let i = 0; i < p.tracks.length; i++) ensureBlocksForTrack(p, i);
+  });
 }
 
 export function getTrackColor(p: Project, idx: number): string {
