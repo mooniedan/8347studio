@@ -10,6 +10,7 @@
   import SendList from './lib/SendList.svelte';
   import AudioTrackView from './lib/AudioTrackView.svelte';
   import ArrangementView from './lib/arrange/ArrangementView.svelte';
+  import { arrangementEndTick } from './lib/arrange/timeline';
   import AutomationLanes from './lib/AutomationLanes.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import ShareExportModal from './lib/ShareExportModal.svelte';
@@ -73,6 +74,8 @@
     readStepVelocities,
     getBpm,
     getLoopRegion,
+    setLoopRegion,
+    type LoopRegion,
     getMidiBinding,
     setMidiBinding,
     removeMidiBinding,
@@ -209,6 +212,28 @@
   // Set by arrangement drill-in / empty-lane create; undefined falls
   // back to the track's first clip (legacy single-pattern behaviour).
   let activePatternByTrack = $state<Record<number, string | undefined>>({});
+  // Phase-12 M6 — the loop region saved when entering arrange mode, so
+  // it can be restored on exit. `undefined` = nothing saved (we're not
+  // managing the loop). Entering arrange expands the loop to span the
+  // whole song so playback traverses the arrangement instead of looping
+  // one bar; leaving restores the user's loop.
+  let arrangeSavedLoop: LoopRegion | null | undefined = undefined;
+
+  function setViewMode(mode: 'track' | 'arrange') {
+    if (mode === viewMode) return;
+    if (mode === 'arrange') {
+      // Only the editor manages the (synced) loop — viewers follow the
+      // owner's transport and never write.
+      if (project && canEdit) {
+        arrangeSavedLoop = getLoopRegion(project);
+        setLoopRegion(project, { startTick: 0, endTick: arrangementEndTick(project) });
+      }
+    } else if (arrangeSavedLoop !== undefined) {
+      if (project && canEdit) setLoopRegion(project, arrangeSavedLoop);
+      arrangeSavedLoop = undefined;
+    }
+    viewMode = mode;
+  }
   let activeProjectId = $state<string | null>(null);
   // Active project's IDB docName — the key for version checkpoints (M5).
   let currentDocName = $state('');
@@ -604,6 +629,10 @@
   }
 
   async function switchProject(id: string): Promise<void> {
+    // Phase-12 M6 — if we're leaving while in arrange mode, restore the
+    // current project's loop region before tearing it down so the
+    // whole-song expansion doesn't persist into it.
+    if (viewMode === 'arrange') setViewMode('track');
     // Demo slot: re-seeds on every click, even when we're already
     // on the demo. The user clicking ★ Demo Song again is an
     // explicit reset intent — discard any in-flight edits.
@@ -1319,14 +1348,14 @@
               class:active={viewMode === 'track'}
               data-testid="view-toggle-track"
               aria-pressed={viewMode === 'track'}
-              onclick={() => (viewMode = 'track')}
+              onclick={() => setViewMode('track')}
             >Track</button>
             <button
               class="vt"
               class:active={viewMode === 'arrange'}
               data-testid="view-toggle-arrange"
               aria-pressed={viewMode === 'arrange'}
-              onclick={() => (viewMode = 'arrange')}
+              onclick={() => setViewMode('arrange')}
             >Arrange</button>
           </div>
           <span
@@ -1408,7 +1437,7 @@
               onDrillIn={(i, patternId) => {
                 selectedTrackIdx = i;
                 activePatternByTrack[i] = patternId;
-                viewMode = 'track';
+                setViewMode('track');
               }}
               onCreateAt={(i, tick) => {
                 if (!project) return;

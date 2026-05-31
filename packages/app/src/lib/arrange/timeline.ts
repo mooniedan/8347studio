@@ -46,9 +46,11 @@ export function snapTicks(tick: number, grid: number = STEP_TICKS): number {
 }
 
 /// Furthest tick any block or audio region reaches, rounded up to a
-/// whole bar, floored at MIN_BARS. The arrangement content width.
-export function songTotalTicks(project: Project): number {
-  let max = MIN_BARS * BAR_TICKS;
+/// whole bar. `floorBars` sets a minimum (the view uses MIN_BARS so an
+/// empty song still fills the timeline; the transport uses 1 so the
+/// loop matches actual content).
+export function songEndTicks(project: Project, floorBars: number): number {
+  let max = floorBars * BAR_TICKS;
   for (let t = 0; t < project.tracks.length; t++) {
     if (getTrackKind(project, t) === 'Audio') {
       for (const r of getAudioRegions(project, t)) {
@@ -61,4 +63,15 @@ export function songTotalTicks(project: Project): number {
     }
   }
   return Math.ceil(max / BAR_TICKS) * BAR_TICKS;
+}
+
+/// Arrangement content width (floored at MIN_BARS so the view fills).
+export function songTotalTicks(project: Project): number {
+  return songEndTicks(project, MIN_BARS);
+}
+
+/// The transport loop end that spans the whole arrangement (floored at
+/// one bar). Used by M6 to make playback traverse the song.
+export function arrangementEndTick(project: Project): number {
+  return songEndTicks(project, 1);
 }
