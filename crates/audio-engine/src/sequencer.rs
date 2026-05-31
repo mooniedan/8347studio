@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::oscillator::{Oscillator, Waveform};
-use crate::plugin::Plugin;
+use crate::plugin::{Plugin, PluginEvent};
 
 /// Default step count for a freshly-constructed Sequencer. Runtime
 /// callers (the engine via `set_step_mask` / `set_step_velocity`)
@@ -301,6 +301,18 @@ impl Sequencer {
         v.last_triggered = tick;
     }
 
+    /// Release any held voice playing `midi`. Mirrors the release half of
+    /// `reconcile_step` — used by the external NoteOff path (Phase-12 M2b)
+    /// so a scheduled step block can drive the Sequencer through the same
+    /// ClipScheduler the piano-roll instruments use.
+    fn release_voice(&mut self, midi: u32) {
+        for v in self.voices.iter_mut() {
+            if v.env.is_held() && v.midi == midi as i32 {
+                v.env.release();
+            }
+        }
+    }
+
     /// Reconcile held voices with the mask of the step we're about to enter:
     /// release any held note that's no longer in the mask, and trigger only
     /// new notes. Notes present in consecutive steps sustain without re-attack.
@@ -352,6 +364,20 @@ impl Plugin for Sequencer {
 
     fn set_playing(&mut self, on: bool) {
         Sequencer::set_playing(self, on);
+    }
+
+    /// Phase-12 M2b — respond to scheduled notes so a step pattern placed
+    /// as an arrangement block plays through the ClipScheduler (the same
+    /// path the piano-roll instruments use). Arranged step tracks emit
+    /// empty `steps`, so `advance_for_window` is a no-op and these events
+    /// are the sole driver; the self-clocked single-block path is
+    /// untouched.
+    fn handle_event(&mut self, ev: PluginEvent) {
+        match ev {
+            PluginEvent::NoteOn { pitch, velocity } => self.trigger_voice(pitch as u32, velocity),
+            PluginEvent::NoteOff { pitch } => self.release_voice(pitch as u32),
+            _ => {}
+        }
     }
 
     fn voice_count_hint(&self) -> Option<u32> {
@@ -416,6 +442,36 @@ mod tests {
         let peak = buf.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
         assert!(peak > 0.05, "peak was {peak}");
         assert!(buf.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn external_note_on_triggers_a_voice() {
+        // Phase-12 M2b — arranged step blocks drive the Sequencer via the
+        // ClipScheduler's NoteOn, not the self-clock. With no steps set,
+        // `advance_for_window` is a no-op; a NoteOn must still sound.
+        let mut seq = Sequencer::new(48_000.0);
+        seq.set_playing(true);
+        seq.handle_event(PluginEvent::NoteOn { pitch: 60, velocity: 100 });
+        let mut buf = alloc::vec![0.0f32; 4800];
+        seq.process(&mut buf);
+        let peak = buf.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.05, "no audio after external NoteOn; peak {peak}");
+        assert!(buf.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn external_note_off_releases_the_voice() {
+        let mut seq = Sequencer::new(48_000.0);
+        seq.set_playing(true);
+        seq.handle_event(PluginEvent::NoteOn { pitch: 60, velocity: 100 });
+        seq.handle_event(PluginEvent::NoteOff { pitch: 60 });
+        // Release ramp is ~80 ms; render well past it so the voice fades
+        // to silence rather than sustaining forever.
+        let mut buf = alloc::vec![0.0f32; 48_000];
+        seq.process(&mut buf);
+        let tail = &buf[buf.len() - 4800..];
+        let tail_peak = tail.iter().cloned().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(tail_peak < 1e-4, "voice did not release; tail peak {tail_peak}");
     }
 
     #[test]

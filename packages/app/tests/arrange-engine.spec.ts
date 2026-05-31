@@ -26,6 +26,7 @@ interface ArrangeBridge {
   addNoteToPattern: (patternId: string, note: Note) => boolean;
   inspectScheduledNotes: (trackIdx: number) => Note[];
   getPianoRollNotes: (trackIdx: number) => Note[];
+  setPatternStepMask: (patternId: string, index: number, notes: number) => boolean;
 }
 
 async function bridgeReady(page: Page) {
@@ -130,5 +131,69 @@ test.describe('phase-12 M2a — multi-block flatten', () => {
     const scheduled = await page.evaluate(() => (window as unknown as { __bridge: ArrangeBridge }).__bridge.inspectScheduledNotes(0));
     expect(scheduled.length).toBe(authored.length);
     expect(ticksOf(scheduled)).toEqual(ticksOf(authored));
+  });
+});
+
+// SEQ_LOW_MIDI from the engine: step bit 0 = MIDI note 48.
+const SEQ_LOW_MIDI = 48;
+
+/// The default project's first track is a step-seq oscillator track.
+/// Returns its single migrated block + pattern; sets step 0's bit 0 so
+/// the pattern has exactly one note (pitch 48 at tick 0).
+async function stepTrackWithOneHit(page: Page) {
+  return page.evaluate(() => {
+    const b = (window as unknown as { __bridge: ArrangeBridge }).__bridge;
+    const block = b.listBlocks(0)[0];
+    b.setPatternStepMask(block.patternId, 0, 1); // step 0, bit 0 → MIDI 48 @ tick 0
+    return { idx: 0, patternId: block.patternId, blockId: block.id, kind: block.kind };
+  }) as Promise<{ idx: number; patternId: string; blockId: string; kind: string }>;
+}
+
+test.describe('phase-12 M2b — step-block flatten', () => {
+  test('single step block at 0 stays self-clocked (no scheduled notes)', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+    const t = await stepTrackWithOneHit(page);
+    expect(t.kind).toBe('StepSeq'); // precondition: default track 0 is step-seq
+
+    // One block at tick 0 → the sequencer self-clocks it; nothing is
+    // routed through the ClipScheduler (so it isn't double-fired).
+    const notes = await page.evaluate(() => (window as unknown as { __bridge: ArrangeBridge }).__bridge.inspectScheduledNotes(0));
+    expect(notes).toEqual([]);
+  });
+
+  test('a second step block makes the track note-driven at both positions', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+    const t = await stepTrackWithOneHit(page);
+
+    await page.evaluate(
+      (a) => (window as unknown as { __bridge: ArrangeBridge }).__bridge.placeBlock(a.idx, a.patternId, a.at),
+      { idx: t.idx, patternId: t.patternId, at: 2 * BAR },
+    );
+    const notes = await page.evaluate(() => (window as unknown as { __bridge: ArrangeBridge }).__bridge.inspectScheduledNotes(0));
+    // Both blocks now flatten to notes at MIDI 48, bars 0 and 2.
+    expect(ticksOf(notes)).toEqual([0, 2 * BAR]);
+    expect(notes.every((n) => n.pitch === SEQ_LOW_MIDI)).toBe(true);
+  });
+
+  test('offset step block loops its pattern to fill (2× in a 2-bar block)', async ({ page }) => {
+    await page.goto('/');
+    await bridgeReady(page);
+    const t = await stepTrackWithOneHit(page);
+
+    // Drop the at-0 block and place a single 2-bar block two bars in.
+    // A single offset block is an arrangement → note-driven; the 1-bar
+    // pattern loops twice to fill it (bars 2 and 3).
+    await page.evaluate(
+      (a) => {
+        const b = (window as unknown as { __bridge: ArrangeBridge }).__bridge;
+        b.deleteBlock(a.blockId);
+        b.placeBlock(a.idx, a.patternId, a.at, { lengthTicks: a.len, loop: true });
+      },
+      { idx: t.idx, patternId: t.patternId, blockId: t.blockId, at: 2 * BAR, len: 2 * BAR },
+    );
+    const notes = await page.evaluate(() => (window as unknown as { __bridge: ArrangeBridge }).__bridge.inspectScheduledNotes(0));
+    expect(ticksOf(notes)).toEqual([2 * BAR, 3 * BAR]);
   });
 });

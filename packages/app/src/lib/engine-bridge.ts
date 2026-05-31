@@ -16,10 +16,16 @@
 import * as Y from 'yjs';
 import {
   getFirstStepSeqClip,
+  STEP_TICKS,
   type Project,
   type Waveform,
 } from './project';
 import * as assetStore from './asset-store';
+
+// Step-mask bit k = MIDI note SEQ_LOW_MIDI + k; the Sequencer supports
+// SEQ_NOTES bits. Mirror crates/audio-engine/src/sequencer.rs.
+const SEQ_LOW_MIDI = 48;
+const SEQ_NOTES = 25;
 import * as audio from './audio';
 import {
   encodeProjectSnapshot,
@@ -309,15 +315,32 @@ function extractInstrument(track: Y.Map<unknown>, trackId: string): InstrumentSn
   return { kind: 'BuiltinSequencer', waveform: code };
 }
 
+/// A step-seq (oscillator/Sequencer) track plays via the self-clocking
+/// step path for the legacy single-block-at-0 case; any real
+/// arrangement (more than one block, or an offset block) becomes
+/// note-driven through the ClipScheduler so the pattern can land at song
+/// positions. `extractStepData` and the note flatten both consult this
+/// so a track is driven by exactly one path — never both (double-fire).
+/// A track with no blocks (a doc synced from a pre-M1 peer) stays on the
+/// legacy self-clock path.
+function stepTrackUsesSelfClock(track: Y.Map<unknown>): boolean {
+  const blocks = track.get('blocks') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!blocks || blocks.length === 0) return true;
+  if (blocks.length !== 1) return false;
+  return ((blocks.get(0).get('startTick') as number | undefined) ?? 0) === 0;
+}
+
 /// Walks the track's first StepSeq clip and returns `(masks, velocities)`
-/// pre-defaulted to `[]` if no clip exists. Non-MIDI tracks always
-/// short-circuit to empty arrays.
+/// pre-defaulted to `[]` if no clip exists. Non-MIDI tracks — and step
+/// tracks that have become arrangements (note-driven, M2b) — short-
+/// circuit to empty arrays so the self-clock stays silent for them.
 function extractStepData(
   project: Project,
   track: Y.Map<unknown>,
 ): { masks: number[]; velocities: number[] } {
   const empty = { masks: [] as number[], velocities: [] as number[] };
   if (track.get('kind') !== 'MIDI') return empty;
+  if (!stepTrackUsesSelfClock(track)) return empty;
   const clipIds = track.get('clips') as Y.Array<string> | undefined;
   if (!clipIds || clipIds.length === 0) return empty;
   let stepClip: Y.Map<unknown> | null = null;
@@ -576,24 +599,60 @@ function readPatternNotes(pattern: Y.Map<unknown>): NoteSnapshot[] {
   return out;
 }
 
-/// Phase-12 M2a — flatten every PianoRoll *block* on the track into the
-/// absolute-tick note list the ClipScheduler consumes. Each block places
-/// its pattern at `block.startTick`; when `loop`, the pattern repeats to
-/// fill `block.lengthTicks` (a 1-bar pattern in a 4-bar block fires 4×).
-/// Notes that would start past the block end are dropped and a note's
-/// tail is truncated to the block end (the last partial repetition).
+/// Flatten a StepSeq pattern's grid into clip-relative notes: each set
+/// bit k of step cell i becomes a note at `SEQ_LOW_MIDI + k`, the cell's
+/// tick, gated to one step. Consecutive same-pitch steps re-trigger
+/// rather than sustain (the self-clock path sustains) — an audible
+/// nuance that only affects arranged step tracks; refine if it matters.
+function readStepPatternNotes(pattern: Y.Map<unknown>): NoteSnapshot[] {
+  const steps = pattern.get('steps') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!steps) return [];
+  const stepTicks = Math.max(
+    1,
+    Math.floor((pattern.get('stepTicks') as number | undefined) ?? STEP_TICKS),
+  );
+  const out: NoteSnapshot[] = [];
+  steps.toArray().forEach((cell, i) => {
+    const mask = ((cell.get('notes') as number | undefined) ?? 0) >>> 0;
+    if (mask === 0) return;
+    const v = cell.get('velocity');
+    const velocity = (typeof v === 'number' ? Math.max(1, Math.min(127, v | 0)) : 100) & 0xff;
+    const tick = (cell.get('tick') as number | undefined) ?? i * stepTicks;
+    for (let k = 0; k < SEQ_NOTES; k++) {
+      if (mask & (1 << k)) {
+        out.push({ pitch: (SEQ_LOW_MIDI + k) & 0xff, velocity, startTick: tick, lengthTicks: stepTicks });
+      }
+    }
+  });
+  return out;
+}
+
+/// Clip-relative notes for any pattern kind — the unit the block
+/// flatten places + loops.
+function patternRelativeNotes(pattern: Y.Map<unknown>): NoteSnapshot[] {
+  const kind = pattern.get('kind');
+  if (kind === 'PianoRoll') return readPatternNotes(pattern);
+  if (kind === 'StepSeq') return readStepPatternNotes(pattern);
+  return [];
+}
+
+/// Phase-12 M2 — flatten every block on the track into the absolute-tick
+/// note list the ClipScheduler consumes. Each block places its pattern
+/// at `block.startTick`; when `loop`, the pattern repeats to fill
+/// `block.lengthTicks` (a 1-bar pattern in a 4-bar block fires 4×).
+/// Notes past the block end are dropped; the last partial repetition is
+/// truncated to the block end.
 ///
-/// Step-seq blocks are intentionally skipped here — oscillator/Sequencer
-/// tracks still play via the self-clocking step path (`extractStepData`)
-/// until M2b unifies them. A track with no blocks (e.g. a doc synced
-/// from a pre-M1 peer) falls back to the legacy first-PianoRoll-clip
-/// behaviour so audio never silently drops.
-function extractPianoRollNotes(project: Project, track: Y.Map<unknown>): NoteSnapshot[] {
+/// PianoRoll blocks always flatten here (M2a). StepSeq blocks flatten
+/// only when the track is an *arrangement* — a single block at tick 0
+/// stays on the self-clocking sequencer (`extractStepData`), so it isn't
+/// double-fired. A track with no blocks (pre-M1 synced doc) falls back
+/// to the legacy first-PianoRoll-clip behaviour.
+function extractScheduledNotes(project: Project, track: Y.Map<unknown>): NoteSnapshot[] {
   if (track.get('kind') !== 'MIDI') return [];
   const blocks = track.get('blocks') as Y.Array<Y.Map<unknown>> | undefined;
 
   if (!blocks || blocks.length === 0) {
-    // Legacy fallback: first PianoRoll clip, notes as-authored.
     const clipIds = track.get('clips') as Y.Array<string> | undefined;
     if (!clipIds) return [];
     for (const cid of clipIds.toArray()) {
@@ -603,14 +662,17 @@ function extractPianoRollNotes(project: Project, track: Y.Map<unknown>): NoteSna
     return [];
   }
 
+  const selfClock = stepTrackUsesSelfClock(track);
   const out: NoteSnapshot[] = [];
   blocks.forEach((block) => {
     const patternId = block.get('patternId') as string | undefined;
     if (!patternId) return;
     const pattern = project.clipById.get(patternId);
-    if (!pattern || pattern.get('kind') !== 'PianoRoll') return; // step blocks: M2b
+    if (!pattern) return;
+    // Step pattern on a still-self-clocked track: the sequencer plays it.
+    if (pattern.get('kind') === 'StepSeq' && selfClock) return;
 
-    const patternNotes = readPatternNotes(pattern);
+    const patternNotes = patternRelativeNotes(pattern);
     if (patternNotes.length === 0) return;
 
     const blockStart = Math.max(0, Math.floor((block.get('startTick') as number | undefined) ?? 0));
@@ -703,7 +765,7 @@ export function extractSnapshot(project: Project): ProjectSnapshot {
       instrument:     extractInstrument(track, id),
       steps:          steps.masks,
       stepVelocities: steps.velocities,
-      pianoRollNotes: extractPianoRollNotes(project, track),
+      pianoRollNotes: extractScheduledNotes(project, track),
       inserts:        extractInserts(track),
       sends:          extractSends(project, track),
       audioRegions:   extractAudioRegions(track),
