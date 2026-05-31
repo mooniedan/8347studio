@@ -165,6 +165,43 @@ async function enrichWithBellSample(
   }
 }
 
+/// Full Song post-seed enrichment. The ~4-minute showcase
+/// (`seedFullSong`) is MIDI-only inside the transaction; the real
+/// `bell.wav` is decoded + dropped here, async, as an intro chime on a
+/// dedicated Audio track.
+///
+/// Note: `importAssetIntoTrack` stores `startSample: 0`, and the engine
+/// positions audio regions by sample — so a seed-placed region plays
+/// from the song start. Placing the bell at a non-zero bar would need a
+/// tick→sample conversion at the *real* engine sample rate (no
+/// hard-coding per the realism rule); that's deferred. The bell rings in
+/// as the song opens.
+export async function enrichFullSong(
+  project: Project,
+  deps: { importAssetIntoTrack: DemoEnrichmentDeps['importAssetIntoTrack'] },
+): Promise<void> {
+  addAudioTrack(project, 'Bell');
+  const audioIdx = project.tracks.length - 1;
+  let hash: string;
+  try {
+    const res = await fetch('/demo-assets/bell.wav');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    ({ hash } = await deps.importAssetIntoTrack(audioIdx, bytes, 'bell.wav'));
+  } catch (err) {
+    console.warn('full song bell import failed:', err);
+    return;
+  }
+  setTrackGain(project, audioIdx, 0.6);
+  setTrackColor(project, audioIdx, TRACK_PALETTE[4]);
+  // Fades from the asset's real sample rate (bell.wav is 44.1 kHz).
+  const sr = getAssetMetadata(project, hash)?.sampleRate;
+  if (sr && getAudioRegions(project, audioIdx).length > 0) {
+    setAudioRegionFade(project, audioIdx, 0, 'in', Math.round(0.01 * sr));
+    setAudioRegionFade(project, audioIdx, 0, 'out', Math.round(0.4 * sr));
+  }
+}
+
 /// Generate a 2 s 48 kHz mono pad-riser WAV (RIFF + 16-bit PCM).
 /// Pitch sweeps from C2 (65 Hz) up two octaves with a soft attack
 /// and exponential decay so it reads as a transition effect rather

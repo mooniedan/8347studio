@@ -6,6 +6,7 @@
     archivedProjects,
     createProjectInfo,
     DEMO_PROJECT_ID,
+    FULL_SONG_PROJECT_ID,
     emptyTrash,
     loadRegistry,
     purgeProject,
@@ -97,6 +98,11 @@
     // id re-seeds it fresh each click. App.svelte handles the actual
     // creation; the menu just signals intent.
     onSwitch(DEMO_PROJECT_ID);
+    open = false;
+  }
+
+  function handleNewFullSong() {
+    onSwitch(FULL_SONG_PROJECT_ID);
     open = false;
   }
 
@@ -192,6 +198,7 @@
     <div class="menu" data-testid="projects-menu-list">
       <button class="new" data-testid="projects-new" onclick={handleNew}>+ New project…</button>
       <button class="new demo" data-testid="projects-new-demo" onclick={handleNewDemo}>★ Demo Song</button>
+      <button class="new demo" data-testid="projects-new-fullsong" onclick={handleNewFullSong}>♫ Full Song</button>
       <button
         class="new import"
         data-testid="projects-import"

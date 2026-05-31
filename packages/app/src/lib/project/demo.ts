@@ -345,6 +345,171 @@ export function seedDemoSong(p: Project): void {
   });
 }
 
+// ---- Full Song — a realistic ~4-minute multi-section track ------------
+//
+// Separate from the Demo Song (the sub-minute feature canary): this is
+// the "what an average track looks like today" showcase. ~112 bars at
+// 110 BPM ≈ 4:04, structured Intro · Verse · Chorus · Verse · Chorus ·
+// Bridge · Chorus · Outro, with *distinct* patterns per section (not one
+// looped bar). Reused chorus/verse patterns are linked blocks. The bell
+// sample is dropped in by App.svelte::enrichFullSong post-boot.
+
+const FULL_SONG_BPM = 110;
+
+export function seedFullSong(p: Project): void {
+  const BAR = STEPS_PER_CLIP * STEP_TICKS;
+  // Drum-map + step-mask bit helpers.
+  const bit = (semi: number) => 1 << semi; // bit k = MIDI 48 + k
+  const C = bit(0), Eb = bit(3), F = bit(5), G = bit(7), Ab = bit(8), Bb = bit(10);
+
+  p.doc.transact(() => {
+    seedMetaAndTempo(p, FULL_SONG_BPM);
+    p.meta.set('name', 'Full Song');
+
+    // --- Tracks (idx 0 Lead · 1 Bass · 2 Pad · 3 Drums · 4 Reverb) ---
+    const leadId = addSubtractiveTrackInner(p, 'Lead');
+    const LEAD = 0;
+    const bassId = addMidiTrack(p, 'saw');
+    const BASS = 1;
+    p.trackById.get(bassId)?.set('name', 'Bass');
+    const padId = addSubtractiveTrackInner(p, 'Pad');
+    const PAD = 2;
+    const drumsId = addDrumkitTrack(p, 'Drums');
+    const DRUMS = 3;
+    const reverbId = addBusTrack(p, 'Reverb Bus');
+    const REVERB = 4;
+
+    // --- Pattern builders -------------------------------------------------
+    const firstClip = (trackIdx: number): string =>
+      (p.trackById.get(p.tracks.get(trackIdx))?.get('clips') as Y.Array<string>).get(0);
+    const note = (pitch: number, step: number, len: number, vel = 100) => ({
+      pitch, velocity: vel, startTick: step * STEP_TICKS, lengthTicks: len * STEP_TICKS,
+    });
+    const fillPiano = (clipId: string, notes: ReturnType<typeof note>[]) => {
+      const clip = p.clipById.get(clipId);
+      if (clip) for (const n of notes) addPianoRollNote(p, clip, n);
+    };
+    const newPiano = (trackId: string, notes: ReturnType<typeof note>[]): string => {
+      const id = createPianoRollClip(p, trackId);
+      fillPiano(id, notes);
+      return id;
+    };
+    const writeMasks = (clipId: string, masks: number[]) => {
+      const clip = p.clipById.get(clipId);
+      if (clip) masks.forEach((m, i) => writeStepNotes(clip, i, m >>> 0));
+    };
+    const newStep = (trackId: string, masks: number[]): string => {
+      const id = createStepSeqClip(p, trackId, masks);
+      return id;
+    };
+    // place a block of `patternId` over [startBar, endBar) on a track.
+    const section = (trackIdx: number, patternId: string, startBar: number, endBar: number, loop = true) =>
+      placeBlock(p, trackIdx, patternId, startBar * BAR, { lengthTicks: (endBar - startBar) * BAR, loop });
+    const clearBlocks = (trackIdx: number) => {
+      for (const b of listBlocksForTrack(p, trackIdx)) deleteBlock(p, b.id);
+    };
+
+    // --- LEAD: a chorus hook + a contrasting bridge melody ---------------
+    const leChorus = firstClip(LEAD); // reuse the auto-clip
+    fillPiano(leChorus, [
+      // Cm
+      note(67, 0, 4, 110), note(63, 4, 4, 100), note(60, 8, 8, 96),
+      // Bb
+      note(65, 16, 4, 108), note(62, 20, 4, 98), note(58, 24, 8, 94),
+      // Ab
+      note(63, 32, 4, 104), note(60, 36, 4, 96), note(56, 40, 8, 92),
+      // G (turnaround)
+      note(62, 48, 8, 100), note(55, 56, 8, 90),
+    ]);
+    const leBridge = newPiano(leadId, [
+      note(72, 0, 8, 104), note(70, 8, 4, 96), note(67, 12, 4, 96),
+      note(68, 16, 8, 100), note(65, 24, 8, 92),
+      note(67, 32, 8, 100), note(63, 40, 8, 92),
+      note(65, 48, 16, 96),
+    ]);
+
+    // --- PAD: a sustained Cm–Bb–Ab–G bed reused all song ----------------
+    const paChords = firstClip(PAD);
+    fillPiano(paChords, [
+      note(48, 0, 16, 70), note(51, 0, 16, 66), note(55, 0, 16, 66),  // Cm
+      note(46, 16, 16, 70), note(50, 16, 16, 66), note(53, 16, 16, 66), // Bb
+      note(44, 32, 16, 70), note(48, 32, 16, 66), note(51, 32, 16, 66), // Ab
+      note(43, 48, 16, 70), note(47, 48, 16, 66), note(50, 48, 16, 66), // G
+    ]);
+
+    // --- BASS: distinct verse / chorus / bridge grooves -----------------
+    const baVerse = firstClip(BASS);
+    writeMasks(baVerse, [C, 0, G, 0, C, 0, G, Eb, C, 0, G, 0, C, 0, G, C]);
+    const baChorus = newStep(bassId, [C, 0, 0, C, Eb, 0, 0, Eb, F, 0, 0, F, G, 0, 0, G]);
+    const baBridge = newStep(bassId, [Ab, 0, Ab, 0, F, 0, F, 0, G, 0, G, 0, G, 0, Bb, 0]);
+
+    // --- DRUMS: intro / verse / chorus / bridge / outro ------------------
+    const K = DRUM_PITCH_KICK, S = DRUM_PITCH_SNARE, H = DRUM_PITCH_CHAT, O = DRUM_PITCH_OHAT;
+    const dHit = (pitch: number, step: number, vel = 100) => note(pitch, step, 1, vel);
+    const drVerse = firstClip(DRUMS);
+    fillPiano(drVerse, [
+      dHit(K, 0, 112), dHit(K, 8, 110), dHit(S, 4, 100), dHit(S, 12, 100),
+      ...[2, 6, 10, 14].map((s) => dHit(H, s, 78)),
+    ]);
+    const drIntro = newPiano(drumsId, [dHit(K, 0, 100), ...[4, 8, 12].map((s) => dHit(H, s, 70))]);
+    const drChorus = newPiano(drumsId, [
+      dHit(K, 0, 118), dHit(K, 8, 112), dHit(K, 11, 90), dHit(S, 4, 106), dHit(S, 12, 106),
+      ...[2, 6, 10].map((s) => dHit(H, s, 82)), dHit(O, 14, 92),
+    ]);
+    const drBridge = newPiano(drumsId, [dHit(K, 0, 110), dHit(S, 8, 100), dHit(H, 6, 74), dHit(H, 14, 74)]);
+    const drOutro = newPiano(drumsId, [dHit(K, 0, 100), dHit(K, 8, 90), dHit(S, 12, 88), dHit(H, 4, 70)]);
+
+    // --- Arrangement (bars): Intro 0-8 · V1 8-24 · C1 24-40 · V2 40-56 ·
+    //     C2 56-72 · Bridge 72-88 · C3 88-104 · Outro 104-112 -------------
+    for (const t of [LEAD, BASS, PAD, DRUMS]) clearBlocks(t);
+
+    // Pad underpins the whole song.
+    section(PAD, paChords, 0, 112);
+    // Lead: choruses + bridge only.
+    section(LEAD, leChorus, 24, 40);
+    section(LEAD, leChorus, 56, 72);
+    section(LEAD, leBridge, 72, 88);
+    section(LEAD, leChorus, 88, 104);
+    // Bass: verses, choruses, bridge (silent in intro/outro tail).
+    section(BASS, baVerse, 8, 24);
+    section(BASS, baChorus, 24, 40);
+    section(BASS, baVerse, 40, 56);
+    section(BASS, baChorus, 56, 72);
+    section(BASS, baBridge, 72, 88);
+    section(BASS, baChorus, 88, 104);
+    // Drums: through-composed.
+    section(DRUMS, drIntro, 0, 8);
+    section(DRUMS, drVerse, 8, 24);
+    section(DRUMS, drChorus, 24, 40);
+    section(DRUMS, drVerse, 40, 56);
+    section(DRUMS, drChorus, 56, 72);
+    section(DRUMS, drBridge, 72, 88);
+    section(DRUMS, drChorus, 88, 104);
+    section(DRUMS, drOutro, 104, 112);
+
+    // --- Tone + mix -----------------------------------------------------
+    setSynthParam(p, LEAD, 6, 1400); setSynthParam(p, LEAD, 7, 0.22); setSynthParam(p, LEAD, 17, 0.38);
+    setSynthParam(p, PAD, 6, 700); setSynthParam(p, PAD, 7, 0.15); setSynthParam(p, PAD, 12, 0.8); setSynthParam(p, PAD, 17, 0.3);
+    addInsert(p, LEAD, 'builtin:eq'); setInsertParam(p, LEAD, 0, 9, 3);
+    addInsert(p, LEAD, 'builtin:compressor'); setInsertParam(p, LEAD, 1, 0, -16); setInsertParam(p, LEAD, 1, 1, 3);
+    addInsert(p, REVERB, 'builtin:reverb'); setInsertParam(p, REVERB, 0, 1, 0.88); setInsertParam(p, REVERB, 0, 3, 1.0);
+    addSend(p, LEAD, reverbId, 0.3);
+    addSend(p, PAD, reverbId, 0.4);
+    setTrackPan(p, LEAD, 0.12); setTrackPan(p, BASS, -0.12); setTrackPan(p, PAD, -0.05);
+    setTrackGain(p, LEAD, 0.82); setTrackGain(p, BASS, 0.9); setTrackGain(p, PAD, 0.6);
+    setTrackGain(p, DRUMS, 0.95); setTrackGain(p, REVERB, 0.7);
+    setMasterGain(p, 0.82);
+    setTrackColor(p, LEAD, TRACK_PALETTE[1]); setTrackColor(p, BASS, TRACK_PALETTE[5]);
+    setTrackColor(p, PAD, TRACK_PALETTE[7]); setTrackColor(p, DRUMS, TRACK_PALETTE[3]);
+    setTrackColor(p, REVERB, TRACK_PALETTE[6]);
+
+    // The whole song loops, so ♫ Full Song plays start-to-finish.
+    setLoopRegion(p, { startTick: 0, endTick: 112 * BAR });
+
+    void leadId; void bassId; void padId; void drumsId; void reverbId;
+  });
+}
+
 /// Replace a MIDI track's blocks with an explicit arrangement, all
 /// referencing the track's single pattern (linked placements). Used by
 /// the demo seeder; runs inside the seed transaction.

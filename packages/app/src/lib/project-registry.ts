@@ -20,10 +20,14 @@ export const DEFAULT_PROJECT_ID = 'default';
 /// ephemeral Y.Doc with this id. Editing the demo triggers a
 /// "save as" prompt that forks into a real registered project.
 export const DEMO_PROJECT_ID = '__demo__';
+/// Reserved id for the in-memory ~4-minute Full Song showcase — a
+/// realistic multi-section track (vs the Demo Song, which is the quick
+/// sub-minute feature canary). Same ephemeral re-seed-on-click model.
+export const FULL_SONG_PROJECT_ID = '__fullsong__';
 /// Warn the user when archived projects exceed this many bytes.
 export const TRASH_WARN_BYTES = 100 * 1024 * 1024; // 100 MB
 
-export type SeedMode = 'blank' | 'demo';
+export type SeedMode = 'blank' | 'demo' | 'fullsong';
 
 export interface ProjectInfo {
   id: string;

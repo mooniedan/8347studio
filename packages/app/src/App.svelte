@@ -30,6 +30,7 @@
     clearSeedHint,
     createProjectInfo,
     DEMO_PROJECT_ID,
+    FULL_SONG_PROJECT_ID,
     ensureDefaultProject,
     loadRegistry,
     setLastOpenedProject,
@@ -104,7 +105,7 @@
     getCheckpointData,
     type CheckpointMeta,
   } from './lib/checkpoints';
-  import { enrichDemoSong } from './lib/demo-enrichment';
+  import { enrichDemoSong, enrichFullSong } from './lib/demo-enrichment';
   import { attachWindowDebug } from './lib/debug-bridge';
   import {
     attachRootSync,
@@ -243,6 +244,11 @@
   // once the shared project lands.
   let collabViewEpoch = $state(0);
   const projectViewKey = $derived(`${activeProjectId}#${collabViewEpoch}`);
+  // Ephemeral-showcase banner labels (Demo Song vs Full Song share the
+  // same fork-on-edit slot machinery).
+  const isFullSong = $derived(activeProjectId === FULL_SONG_PROJECT_ID);
+  const showcaseTag = $derived(isFullSong ? '♫ FULL SONG' : '★ DEMO');
+  const showcaseName = $derived(isFullSong ? 'Full Song' : 'Demo Song');
   // Tracks the selected track's plugin id so the panel re-mounts on
   // synth-track switch and disappears for non-synth tracks.
   let selectedPluginId = $derived.by(() => {
@@ -504,7 +510,7 @@
     doc.on('update', onUpdate);
   }
 
-  async function bootProject(docName: string, opts: { ephemeral?: boolean; seed?: 'demo' | 'blank' } = {}): Promise<void> {
+  async function bootProject(docName: string, opts: { ephemeral?: boolean; seed?: 'demo' | 'blank' | 'fullsong' } = {}): Promise<void> {
     // Read the per-project seed hint and clear it so a refresh of the
     // same project doesn't re-seed (the Y.Doc already exists in IDB
     // by the time the hint matters; createProject only seeds when
@@ -652,6 +658,21 @@
       }
       // Arm only AFTER enrichment so its writes aren't mistaken for
       // user edits by the "Save as new project" prompt.
+      armDemoDirtyWatcher();
+      return;
+    }
+
+    // ♫ Full Song — the ~4-minute realistic-track showcase. Same
+    // ephemeral re-seed-on-click + fork-on-edit model as the demo.
+    if (id === FULL_SONG_PROJECT_ID) {
+      await tearDownCurrent();
+      activeProjectId = FULL_SONG_PROJECT_ID;
+      inDemo = true;
+      selectedTrackIdx = 0;
+      await bootProject('__fullsong__', { ephemeral: true, seed: 'fullsong' });
+      if (project) {
+        await enrichFullSong(project, { importAssetIntoTrack });
+      }
       armDemoDirtyWatcher();
       return;
     }
@@ -1385,9 +1406,9 @@
 
         {#if inDemo}
           <div class="demo-banner" data-testid="demo-banner" role="status">
-            <span class="demo-tag">★ DEMO</span>
+            <span class="demo-tag">{showcaseTag}</span>
             {#if demoDirty}
-              <span class="demo-msg">Edits to the Demo Song aren't saved.</span>
+              <span class="demo-msg">Edits to the {showcaseName} aren't saved.</span>
               {#if demoSaveAsOpen}
                 <form
                   class="save-form"
@@ -1423,7 +1444,7 @@
                 >Save as new project…</button>
               {/if}
             {:else}
-              <span class="demo-msg">Read-only demo. Edit anything to fork into a real project.</span>
+              <span class="demo-msg">Read-only {isFullSong ? 'full song' : 'demo'}. Edit anything to fork into a real project.</span>
             {/if}
           </div>
         {/if}

@@ -13,6 +13,7 @@ import {
   parseLegacyHash,
   seedDefaults,
   seedDemoSong,
+  seedFullSong,
   seedFromLegacy,
 } from './demo';
 
@@ -63,7 +64,7 @@ interface LegacyHash {
   waveform: Waveform | null;
 }
 
-export type SeedMode = 'blank' | 'demo';
+export type SeedMode = 'blank' | 'demo' | 'fullsong';
 
 export interface CreateProjectOptions {
   /// IndexedDB store name. Defaults to PROJECT_DOC_NAME so the
@@ -99,6 +100,8 @@ export async function createProject(opts: CreateProjectOptions = {}): Promise<Pr
   } else if (project.tracks.length === 0) {
     if (opts.seed === 'demo') {
       seedDemoSong(project);
+    } else if (opts.seed === 'fullsong') {
+      seedFullSong(project);
     } else if (opts.seed === 'blank') {
       // Intentionally unseeded. A collab joiner (`?room=<id>`) absorbs
       // the room's shared project via sync; seeding a default track
