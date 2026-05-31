@@ -9,6 +9,7 @@
   import InsertSlots from './lib/InsertSlots.svelte';
   import SendList from './lib/SendList.svelte';
   import AudioTrackView from './lib/AudioTrackView.svelte';
+  import ArrangementView from './lib/arrange/ArrangementView.svelte';
   import AutomationLanes from './lib/AutomationLanes.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import ShareExportModal from './lib/ShareExportModal.svelte';
@@ -199,6 +200,10 @@
   let project = $state<Project | null>(null);
   let bridge = $state<Bridge | null>(null);
   let selectedTrackIdx = $state(0);
+  // Phase-12 M3 — main canvas view mode. 'track' = the per-track editor
+  // (Sequencer / PianoRoll / AudioTrackView); 'arrange' = the all-tracks
+  // ArrangementView timeline.
+  let viewMode = $state<'track' | 'arrange'>('track');
   let activeProjectId = $state<string | null>(null);
   // Active project's IDB docName — the key for version checkpoints (M5).
   let currentDocName = $state('');
@@ -1302,6 +1307,23 @@
           </div>
         {/if}
         <header class="canvas-head" data-testid="canvas-head">
+          <!-- Phase-12 M3 — track ↔ arrange view toggle. -->
+          <div class="view-toggle" data-testid="view-toggle" role="group" aria-label="Canvas view">
+            <button
+              class="vt"
+              class:active={viewMode === 'track'}
+              data-testid="view-toggle-track"
+              aria-pressed={viewMode === 'track'}
+              onclick={() => (viewMode = 'track')}
+            >Track</button>
+            <button
+              class="vt"
+              class:active={viewMode === 'arrange'}
+              data-testid="view-toggle-arrange"
+              aria-pressed={viewMode === 'arrange'}
+              onclick={() => (viewMode = 'arrange')}
+            >Arrange</button>
+          </div>
           <span
             class="track-stripe"
             data-testid="canvas-track-stripe"
@@ -1372,7 +1394,15 @@
           </div>
         {/if}
         {#key projectViewKey}
-          {#if selectedTrackKind === 'Audio'}
+          {#if viewMode === 'arrange'}
+            <ArrangementView
+              {project}
+              canEdit={canEdit}
+              selectedTrackIdx={selectedTrackIdx}
+              onSelectTrack={(i) => (selectedTrackIdx = i)}
+              playheadTick={publishedPlayheadTick}
+            />
+          {:else if selectedTrackKind === 'Audio'}
             <div class="track-view">
               <AudioTrackView
                 {project}
@@ -1737,6 +1767,36 @@
   }
   .canvas > :global(*:not(.canvas-head):not(.demo-banner)) {
     padding: var(--sp-4);
+  }
+  /* The arrangement timeline manages its own scroll + fills the canvas;
+     opt it out of the default child padding. */
+  .canvas > :global(.arrangement) {
+    padding: 0;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--line-0);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .view-toggle .vt {
+    appearance: none;
+    border: none;
+    background: var(--bg-1);
+    color: var(--fg-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-10);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 10px;
+    cursor: pointer;
+  }
+  .view-toggle .vt.active {
+    background: var(--accent-hi, #6cf);
+    color: var(--bg-0, #000);
   }
 
   .demo-banner {

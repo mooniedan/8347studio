@@ -1307,6 +1307,15 @@ export function getTrackName(p: Project, idx: number): string {
   return ((track?.get('name') as string | undefined) ?? '');
 }
 
+/// Track kind ('MIDI' | 'Audio' | 'Bus'), '' if out of range. Used by
+/// the arrangement view to pick a lane's content source (blocks vs
+/// audio regions).
+export function getTrackKind(p: Project, idx: number): string {
+  if (idx < 0 || idx >= p.tracks.length) return '';
+  const track = p.trackById.get(p.tracks.get(idx));
+  return ((track?.get('kind') as string | undefined) ?? '');
+}
+
 // ---- Arrangement: patterns & blocks (Phase-12 M1) ------------------------
 //
 // A PATTERN is reusable musical content owned by one track — today's
