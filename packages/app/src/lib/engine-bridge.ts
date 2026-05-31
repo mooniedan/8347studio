@@ -560,17 +560,9 @@ function extractAudioRegions(track: Y.Map<unknown>): AudioRegionSnapshot[] {
   return out;
 }
 
-function extractPianoRollNotes(project: Project, track: Y.Map<unknown>): NoteSnapshot[] {
-  if (track.get('kind') !== 'MIDI') return [];
-  const clipIds = track.get('clips') as Y.Array<string> | undefined;
-  if (!clipIds || clipIds.length === 0) return [];
-  let pianoClip: Y.Map<unknown> | null = null;
-  for (const cid of clipIds.toArray()) {
-    const c = project.clipById.get(cid);
-    if (c?.get('kind') === 'PianoRoll') { pianoClip = c; break; }
-  }
-  if (!pianoClip) return [];
-  const notes = pianoClip.get('notes') as Y.Array<Y.Map<unknown>> | undefined;
+/// Read a PianoRoll pattern's raw (clip-relative) notes.
+function readPatternNotes(pattern: Y.Map<unknown>): NoteSnapshot[] {
+  const notes = pattern.get('notes') as Y.Array<Y.Map<unknown>> | undefined;
   if (!notes) return [];
   const out: NoteSnapshot[] = [];
   notes.forEach((n) => {
@@ -580,6 +572,71 @@ function extractPianoRollNotes(project: Project, track: Y.Map<unknown>): NoteSna
       startTick:    (n.get('startTick')   as number | undefined) ?? 0,
       lengthTicks:  (n.get('lengthTicks') as number | undefined) ?? 0,
     });
+  });
+  return out;
+}
+
+/// Phase-12 M2a — flatten every PianoRoll *block* on the track into the
+/// absolute-tick note list the ClipScheduler consumes. Each block places
+/// its pattern at `block.startTick`; when `loop`, the pattern repeats to
+/// fill `block.lengthTicks` (a 1-bar pattern in a 4-bar block fires 4×).
+/// Notes that would start past the block end are dropped and a note's
+/// tail is truncated to the block end (the last partial repetition).
+///
+/// Step-seq blocks are intentionally skipped here — oscillator/Sequencer
+/// tracks still play via the self-clocking step path (`extractStepData`)
+/// until M2b unifies them. A track with no blocks (e.g. a doc synced
+/// from a pre-M1 peer) falls back to the legacy first-PianoRoll-clip
+/// behaviour so audio never silently drops.
+function extractPianoRollNotes(project: Project, track: Y.Map<unknown>): NoteSnapshot[] {
+  if (track.get('kind') !== 'MIDI') return [];
+  const blocks = track.get('blocks') as Y.Array<Y.Map<unknown>> | undefined;
+
+  if (!blocks || blocks.length === 0) {
+    // Legacy fallback: first PianoRoll clip, notes as-authored.
+    const clipIds = track.get('clips') as Y.Array<string> | undefined;
+    if (!clipIds) return [];
+    for (const cid of clipIds.toArray()) {
+      const c = project.clipById.get(cid);
+      if (c?.get('kind') === 'PianoRoll') return readPatternNotes(c);
+    }
+    return [];
+  }
+
+  const out: NoteSnapshot[] = [];
+  blocks.forEach((block) => {
+    const patternId = block.get('patternId') as string | undefined;
+    if (!patternId) return;
+    const pattern = project.clipById.get(patternId);
+    if (!pattern || pattern.get('kind') !== 'PianoRoll') return; // step blocks: M2b
+
+    const patternNotes = readPatternNotes(pattern);
+    if (patternNotes.length === 0) return;
+
+    const blockStart = Math.max(0, Math.floor((block.get('startTick') as number | undefined) ?? 0));
+    const blockLen = Math.max(1, Math.floor((block.get('lengthTicks') as number | undefined) ?? 0));
+    const blockEnd = blockStart + blockLen;
+    const loop = (block.get('loop') as boolean | undefined) ?? true;
+    const patternLen = Math.max(
+      1,
+      Math.floor((pattern.get('lengthTicks') as number | undefined) ?? blockLen),
+    );
+    const reps = loop ? Math.max(1, Math.ceil(blockLen / patternLen)) : 1;
+
+    for (let r = 0; r < reps; r++) {
+      const repOffset = r * patternLen;
+      for (const n of patternNotes) {
+        const absStart = blockStart + repOffset + n.startTick;
+        if (absStart >= blockEnd) continue; // past the block: drop
+        const absEnd = Math.min(blockEnd, absStart + n.lengthTicks);
+        out.push({
+          pitch: n.pitch,
+          velocity: n.velocity,
+          startTick: absStart,
+          lengthTicks: Math.max(0, absEnd - absStart),
+        });
+      }
+    }
   });
   return out;
 }

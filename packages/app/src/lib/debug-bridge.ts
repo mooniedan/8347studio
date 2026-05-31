@@ -22,6 +22,7 @@ import { createPluginUiHost, type PluginHost } from './plugin-ui';
 import {
   attachWasmPluginToTrack as bridgeAttachWasm,
   detachWasmPluginFromTrack as bridgeDetachWasm,
+  extractSnapshot,
   type Bridge,
 } from './engine-bridge';
 import {
@@ -54,6 +55,8 @@ import {
   deleteBlock,
   readSteps,
   writeStepNotes,
+  addPianoRollNote,
+  type PianoRollNote,
   getPianoRollClipForTrack,
   getStepSeqClipForTrack,
   getTrackColor,
@@ -294,6 +297,23 @@ function buildDebugBridge(deps: DebugBridgeDeps): Record<string, unknown> {
         p.doc.transact(() => writeStepNotes(pattern, index, notes));
         return true;
       }, false),
+    /// Phase-12 M2a — append a note to a PianoRoll pattern by id (test
+    /// builder for the multi-block flatten specs).
+    addNoteToPattern: (patternId: string, note: PianoRollNote) =>
+      withProject(deps, (p) => {
+        const pattern = p.clipById.get(patternId);
+        if (!pattern || pattern.get('kind') !== 'PianoRoll') return false;
+        addPianoRollNote(p, pattern, note);
+        return true;
+      }, false),
+    /// The absolute-tick notes the engine's ClipScheduler will fire for
+    /// a track — i.e. the flattened multi-block output. Lets the M2a
+    /// specs assert block positions + loop-to-fill deterministically.
+    inspectScheduledNotes: (trackIdx: number) =>
+      withProject(deps, (p) => {
+        const snap = extractSnapshot(p);
+        return snap.tracks[trackIdx]?.pianoRollNotes ?? [];
+      }, [] as { pitch: number; velocity: number; startTick: number; lengthTicks: number }[]),
     /// Phase-8 M1 — pure manifest validator. Safe to expose.
     parsePluginManifest: (raw: unknown): ParseResult => parseManifest(raw),
     /// Phase-8 M5b — inject a manifest into `meta.installedPlugins`
