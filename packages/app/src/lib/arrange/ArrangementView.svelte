@@ -10,6 +10,8 @@
     resizeBlock,
     duplicateBlock,
     deleteBlock,
+    setBlockLoop,
+    makeUnique,
     STEP_TICKS,
     type Project,
   } from '../project';
@@ -216,6 +218,35 @@
     return { startTick: item.startTick, lengthTicks: item.lengthTicks };
   }
 
+  // ---- Selected-block inspector strip (M5b) -----------------------------
+
+  const selectedBlock = $derived.by(() => {
+    if (selectedBlockIds.size !== 1) return null;
+    const id = [...selectedBlockIds][0];
+    for (const lane of lanes) {
+      const it = lane.items.find((i) => i.id === id && i.kind === 'block');
+      if (it) return { lane, item: it };
+    }
+    return null;
+  });
+
+  function toggleLoop() {
+    if (!canEdit || !selectedBlock) return;
+    setBlockLoop(project, selectedBlock.item.id, !selectedBlock.item.loop);
+    refresh();
+  }
+  function makeUniqueSelected() {
+    if (!canEdit || !selectedBlock) return;
+    makeUnique(project, selectedBlock.item.id);
+    refresh();
+  }
+  function deleteSelected() {
+    if (!canEdit || !selectedBlock) return;
+    deleteBlock(project, selectedBlock.item.id);
+    selectedBlockIds = new Set();
+    refresh();
+  }
+
   const totalTicks = $derived.by(() => {
     void lanes;
     void preview;
@@ -287,6 +318,31 @@
       ></div>
     </div>
   </div>
+
+  {#if selectedBlock}
+    <div class="block-inspector" data-testid="block-inspector">
+      <span class="bi-stripe" style:background={selectedBlock.lane.color}></span>
+      <span class="bi-label">{selectedBlock.item.label}</span>
+      <span class="bi-len" data-testid="bi-length">
+        {(selectedBlock.item.lengthTicks / BAR_TICKS).toFixed(2)} bars
+      </span>
+      <span class="bi-spacer"></span>
+      <button
+        class="bi-btn"
+        class:active={selectedBlock.item.loop}
+        data-testid="bi-loop"
+        aria-pressed={selectedBlock.item.loop}
+        disabled={!canEdit}
+        onclick={toggleLoop}
+      >Loop</button>
+      <button class="bi-btn" data-testid="bi-make-unique" disabled={!canEdit} onclick={makeUniqueSelected}>
+        Make Unique
+      </button>
+      <button class="bi-btn danger" data-testid="bi-delete" disabled={!canEdit} onclick={deleteSelected}>
+        Delete
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -369,5 +425,52 @@
     background: var(--accent-hi, #6cf);
     pointer-events: none;
     z-index: 1;
+  }
+  .block-inspector {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 12px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--border, #333);
+    font-size: 12px;
+    color: var(--fg-1);
+  }
+  .bi-stripe {
+    width: 4px;
+    height: 18px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+  }
+  .bi-len {
+    color: var(--fg-3, #888);
+    font-variant-numeric: tabular-nums;
+  }
+  .bi-spacer {
+    flex: 1 1 auto;
+  }
+  .bi-btn {
+    appearance: none;
+    border: 1px solid var(--border, #444);
+    background: var(--bg-2);
+    color: var(--fg-1);
+    border-radius: 4px;
+    padding: 3px 9px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .bi-btn.active {
+    background: var(--accent-hi, #6cf);
+    color: var(--bg-0, #000);
+    border-color: transparent;
+  }
+  .bi-btn.danger {
+    color: #e88;
+  }
+  .bi-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

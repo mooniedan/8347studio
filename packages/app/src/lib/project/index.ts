@@ -1450,6 +1450,14 @@ export function resizeBlock(p: Project, blockId: string, newLengthTicks: number)
   return true;
 }
 
+/// Toggle whether a block loops its pattern to fill its length.
+export function setBlockLoop(p: Project, blockId: string, loop: boolean): boolean {
+  const f = findBlock(p, blockId);
+  if (!f) return false;
+  p.doc.transact(() => f.block.set('loop', loop));
+  return true;
+}
+
 /// Duplicate a block as a LINKED instance — the copy references the same
 /// pattern, so editing the pattern updates both. Defaults the copy to
 /// sit immediately after the source. Returns the new block id.
