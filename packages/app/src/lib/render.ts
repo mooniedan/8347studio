@@ -9,6 +9,7 @@
 import {
   getLoopRegion,
   getAudioRegions,
+  listBlocksForTrack,
   getBpm,
   PPQ,
   type Project,
@@ -43,6 +44,11 @@ export function renderEndTick(project: Project, range: RenderRange): number {
   for (let t = 0; t < project.tracks.length; t++) {
     for (const r of getAudioRegions(project, t)) {
       end = Math.max(end, r.startTick + r.lengthTicks);
+    }
+    // Phase-12 — span the arrangement so 'project' render reaches every
+    // placed block (blocks postdate the original audio-region-only end).
+    for (const b of listBlocksForTrack(project, t)) {
+      end = Math.max(end, b.startTick + b.lengthTicks);
     }
   }
   return end > 0 ? end : PPQ * 4;

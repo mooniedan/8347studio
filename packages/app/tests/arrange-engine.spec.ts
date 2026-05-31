@@ -116,19 +116,21 @@ test.describe('phase-12 M2a — multi-block flatten', () => {
     expect(ticksOf(notes)).toEqual([0]); // once, not four times
   });
 
-  test('demo lead is unchanged: single full-width block flattens to identity', async ({ page }) => {
+  test('a single full-width block flattens to identity (no drift, no duplication)', async ({ page }) => {
     await page.goto('/');
     await bridgeReady(page);
-    await page.click('[data-testid="projects-menu"]');
-    await page.click('[data-testid="projects-new-demo"]');
-    await expect
-      .poll(() => page.evaluate(() => (window as unknown as { __project: { projectName: string | null } }).__project.projectName))
-      .toBe('Demo Song');
+    const { idx, patternId } = await freshSubtractive(page);
 
-    // Lead (track 0) has one PianoRoll block at 0 → flattened notes
-    // match the authored notes one-for-one (no drift, no duplication).
-    const authored = await page.evaluate(() => (window as unknown as { __bridge: ArrangeBridge }).__bridge.getPianoRollNotes(0));
-    const scheduled = await page.evaluate(() => (window as unknown as { __bridge: ArrangeBridge }).__bridge.inspectScheduledNotes(0));
+    // Two notes in the pattern; the migrated single block (length =
+    // pattern length) must flatten them 1:1 at their authored ticks.
+    await page.evaluate((a) => {
+      const b = (window as unknown as { __bridge: ArrangeBridge }).__bridge;
+      b.addNoteToPattern(a.patternId, { pitch: 60, velocity: 100, startTick: 0, lengthTicks: 240 });
+      b.addNoteToPattern(a.patternId, { pitch: 64, velocity: 90, startTick: 960, lengthTicks: 240 });
+    }, { patternId });
+
+    const authored = await page.evaluate((i) => (window as unknown as { __bridge: ArrangeBridge }).__bridge.getPianoRollNotes(i), idx);
+    const scheduled = await page.evaluate((i) => (window as unknown as { __bridge: ArrangeBridge }).__bridge.inspectScheduledNotes(i), idx);
     expect(scheduled.length).toBe(authored.length);
     expect(ticksOf(scheduled)).toEqual(ticksOf(authored));
   });

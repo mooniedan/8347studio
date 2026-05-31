@@ -31,6 +31,9 @@ import {
   DRUM_PITCH_SNARE,
   getPianoRollClipForTrack,
   getStepSeqClipForTrack,
+  listBlocksForTrack,
+  deleteBlock,
+  placeBlock,
   PPQ,
   setContainerBranchGain,
   setContainerSubInsertParam,
@@ -314,8 +317,49 @@ export function seedDemoSong(p: Project): void {
     // App.svelte::enrichDemoSongWithAudioRiser (the WAV is
     // synthesized in-page so we don't bundle a licensed sample).
 
+    // 15. Phase-12 M7 — arrange the patterns into a 16-bar song:
+    // Chorus 1 (full) · Verse (no lead) · Chorus 2 (full, reused) ·
+    // Outro (drums). The default loop stays at 4 bars (step 10), so
+    // ★ Demo Song still plays Chorus 1 exactly as before; switching to
+    // Arrange reveals the whole structure and (M6) expands the loop to
+    // play it end-to-end. Reused chorus blocks are *linked* — they
+    // share each track's pattern, so an edit updates both choruses.
+    const SECTION = PROG_STEPS * STEP_TICKS; // 4 bars
+    arrangeTrack(p, leadIdx, [
+      { startTick: 0, lengthTicks: SECTION, loop: false },            // Chorus 1
+      { startTick: 2 * SECTION, lengthTicks: SECTION, loop: false },  // Chorus 2
+    ]);
+    arrangeTrack(p, bassIdx, [
+      { startTick: 0, lengthTicks: SECTION, loop: true },             // Chorus 1
+      { startTick: 1 * SECTION, lengthTicks: SECTION, loop: true },   // Verse
+      { startTick: 2 * SECTION, lengthTicks: SECTION, loop: true },   // Chorus 2
+    ]);
+    arrangeTrack(p, drumsIdx, [
+      { startTick: 0, lengthTicks: SECTION, loop: false },            // Chorus 1
+      { startTick: 1 * SECTION, lengthTicks: SECTION, loop: false },  // Verse
+      { startTick: 2 * SECTION, lengthTicks: SECTION, loop: false },  // Chorus 2
+      { startTick: 3 * SECTION, lengthTicks: SECTION, loop: false },  // Outro
+    ]);
+
     void leadId; void bassTrackId; void reverbBusId; void drumsId;
   });
+}
+
+/// Replace a MIDI track's blocks with an explicit arrangement, all
+/// referencing the track's single pattern (linked placements). Used by
+/// the demo seeder; runs inside the seed transaction.
+function arrangeTrack(
+  p: Project,
+  trackIdx: number,
+  placements: { startTick: number; lengthTicks: number; loop: boolean }[],
+): void {
+  for (const b of listBlocksForTrack(p, trackIdx)) deleteBlock(p, b.id);
+  const trackId = p.tracks.get(trackIdx);
+  const patternId = (p.trackById.get(trackId)?.get('clips') as Y.Array<string> | undefined)?.get(0);
+  if (!patternId) return;
+  for (const pl of placements) {
+    placeBlock(p, trackIdx, patternId, pl.startTick, { lengthTicks: pl.lengthTicks, loop: pl.loop });
+  }
 }
 
 /// Internal — same as the public addSubtractiveTrack but lets the

@@ -267,6 +267,28 @@ test.describe('demo song', () => {
     expect(binding).not.toBeNull();
     expect(binding!.trackIdx).toBe(0);
     expect(binding!.paramId).toBe(6);
+
+    // Phase-12 M7 — the demo is arranged into a 16-bar song from
+    // reusable blocks: lead plays the two choruses (bars 0 & 8), bass
+    // runs the choruses + verse, drums play all four sections. The
+    // default 4-bar loop still plays Chorus 1; Arrange mode reveals the
+    // whole structure.
+    const blocks = (trackIdx: number) =>
+      page.evaluate((i) => {
+        const w = window as unknown as {
+          __bridge: { listBlocks: (n: number) => { startTick: number; loop: boolean; patternId: string }[] };
+        };
+        return w.__bridge.listBlocks(i);
+      }, trackIdx);
+
+    const leadBlocks = await blocks(0);
+    expect(leadBlocks.map((b) => b.startTick).sort((a, b) => a - b)).toEqual([0, 30720]); // bars 0 & 8
+    // The two chorus blocks are linked (share the lead's one pattern).
+    expect(new Set(leadBlocks.map((b) => b.patternId)).size).toBe(1);
+
+    expect((await blocks(1)).length).toBe(3); // bass: chorus1 + verse + chorus2
+    const drumBlocks = await blocks(3);
+    expect(drumBlocks.map((b) => b.startTick).sort((a, b) => a - b)).toEqual([0, 15360, 30720, 46080]); // all 4 bars-of-4
   });
 
   test('loop toggle + bar inputs control project.meta.loopRegion', async ({ page }) => {
