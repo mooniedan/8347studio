@@ -389,10 +389,18 @@ test.describe('demo song', () => {
     await page.goto('/');
     await bridgeReady(page);
 
-    // First click — fresh demo.
+    // Demo seeding finishes asynchronously: bootProject sets the name,
+    // then enrichDemoSong adds the Riser and (last) Bell audio tracks.
+    // Capturing trackCount before enrichment settles is the race that
+    // used to make this test flaky — wait for the Bell track, the final
+    // enrichment step, before reading the canonical count.
+    const enriched = async () =>
+      (await inspectTracks(page)).some((t) => t.name === 'Bell');
+
+    // First click — fresh demo, fully enriched.
     await page.click('[data-testid="projects-menu"]');
     await page.click('[data-testid="projects-new-demo"]');
-    await expect.poll(() => projectShape(page).then((s) => s.projectName)).toBe('Demo Song');
+    await expect.poll(enriched).toBe(true);
     const firstShape = await projectShape(page);
 
     // Make an edit to dirty the demo (add another synth track).
@@ -401,7 +409,14 @@ test.describe('demo song', () => {
     // Click ★ Demo Song again — should re-seed, not stack.
     await page.click('[data-testid="projects-menu"]');
     await page.click('[data-testid="projects-new-demo"]');
-    await page.waitForTimeout(200);
+    // Re-seed tears down + re-enriches. The dirtied project has one
+    // extra track (the added synth); the fresh demo settles back at the
+    // canonical enriched count — a value reached only by the fully
+    // re-enriched demo (not the dirtied state, not mid-enrichment), so
+    // polling for it is race-free.
+    await expect
+      .poll(() => projectShape(page).then((s) => s.trackCount))
+      .toBe(firstShape.trackCount);
     const secondShape = await projectShape(page);
     expect(secondShape.trackCount).toBe(firstShape.trackCount);
 
