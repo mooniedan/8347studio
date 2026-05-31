@@ -1400,6 +1400,7 @@
               canEdit={canEdit}
               selectedTrackIdx={selectedTrackIdx}
               onSelectTrack={(i) => (selectedTrackIdx = i)}
+              onDrillIn={(i) => { selectedTrackIdx = i; viewMode = 'track'; }}
               playheadTick={publishedPlayheadTick}
             />
           {:else if selectedTrackKind === 'Audio'}

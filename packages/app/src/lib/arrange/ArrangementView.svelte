@@ -6,6 +6,11 @@
     getTrackKind,
     getTrackName,
     getTrackColor,
+    moveBlock,
+    resizeBlock,
+    duplicateBlock,
+    deleteBlock,
+    STEP_TICKS,
     type Project,
   } from '../project';
   import {
@@ -13,6 +18,8 @@
     HEADER_WIDTH,
     LANE_HEIGHT,
     RULER_HEIGHT,
+    pxToTick,
+    snapTicks,
     songTotalTicks,
   } from './timeline';
   import TimelineRuler from './TimelineRuler.svelte';
@@ -23,19 +30,24 @@
     canEdit = true,
     selectedTrackIdx = 0,
     onSelectTrack = () => {},
+    onDrillIn = () => {},
     playheadTick = 0,
   }: {
     project: Project;
-    /// Accepted for the M4 editing pass; M3 is read-only (selecting a
-    /// lane is a read action, allowed for viewers too).
     canEdit?: boolean;
     selectedTrackIdx?: number;
     onSelectTrack?: (idx: number) => void;
+    /// Double-click a block → open the per-track editor for its track.
+    onDrillIn?: (idx: number) => void;
     playheadTick?: number;
   } = $props();
 
   interface LaneItem {
     id: string;
+    /// 'block' = a MIDI pattern block (draggable here); 'audio' = an
+    /// audio region (read-only in the arrangement — edited in the
+    /// per-track AudioTrackView via drill-in).
+    kind: 'block' | 'audio';
     startTick: number;
     lengthTicks: number;
     label: string;
@@ -45,18 +57,19 @@
     trackIdx: number;
     name: string;
     color: string;
-    kind: string;
+    trackKind: string;
     items: LaneItem[];
   }
 
   function buildLanes(): Lane[] {
     const out: Lane[] = [];
     for (let t = 0; t < project.tracks.length; t++) {
-      const kind = getTrackKind(project, t);
+      const trackKind = getTrackKind(project, t);
       let items: LaneItem[];
-      if (kind === 'Audio') {
+      if (trackKind === 'Audio') {
         items = getAudioRegions(project, t).map((r, i) => ({
           id: `audio-${t}-${i}`,
+          kind: 'audio' as const,
           startTick: r.startTick,
           lengthTicks: r.lengthTicks,
           label: r.assetHash.slice(0, 8),
@@ -65,18 +78,20 @@
       } else {
         items = listBlocksForTrack(project, t).map((b) => ({
           id: b.id,
+          kind: 'block' as const,
           startTick: b.startTick,
           lengthTicks: b.lengthTicks,
           label: b.kind === 'StepSeq' ? 'Step' : b.kind === 'PianoRoll' ? 'Piano' : 'Block',
           loop: b.loop,
         }));
       }
-      out.push({ trackIdx: t, name: getTrackName(project, t), color: getTrackColor(project, t), kind, items });
+      out.push({ trackIdx: t, name: getTrackName(project, t), color: getTrackColor(project, t), trackKind, items });
     }
     return out;
   }
 
   let lanes = $state<Lane[]>(untrack(() => buildLanes()));
+  let selectedBlockIds = $state<Set<string>>(new Set());
 
   function refresh() {
     lanes = buildLanes();
@@ -87,16 +102,105 @@
     project.trackById.observeDeep(refresh);
     project.tracks.observe(refresh);
     project.assets.observe(refresh);
+    window.addEventListener('keydown', onKeyDown);
     return () => {
       project.trackById.unobserveDeep(refresh);
       project.tracks.unobserve(refresh);
       project.assets.unobserve(refresh);
+      window.removeEventListener('keydown', onKeyDown);
     };
   });
 
+  // ---- Drag state (move / resize), preview-then-commit ------------------
+
+  type DragMode = 'move' | 'resize';
+  let drag: {
+    blockId: string;
+    mode: DragMode;
+    startX: number;
+    origStart: number;
+    origLen: number;
+    alt: boolean;
+    moved: boolean;
+  } | null = null;
+  let preview = $state<{ blockId: string; startTick: number; lengthTicks: number } | null>(null);
+
+  const MIN_LEN = STEP_TICKS;
+
+  function startDrag(e: PointerEvent, item: LaneItem, mode: DragMode) {
+    if (!canEdit || item.kind !== 'block') return;
+    drag = {
+      blockId: item.id,
+      mode,
+      startX: e.clientX,
+      origStart: item.startTick,
+      origLen: item.lengthTicks,
+      alt: e.altKey,
+      moved: false,
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!drag) return;
+    const dxPx = e.clientX - drag.startX;
+    if (Math.abs(dxPx) > 3) drag.moved = true;
+    const dxTicks = pxToTick(dxPx);
+    if (drag.mode === 'move') {
+      const startTick = snapTicks(Math.max(0, drag.origStart + dxTicks));
+      preview = { blockId: drag.blockId, startTick, lengthTicks: drag.origLen };
+    } else {
+      const lengthTicks = Math.max(MIN_LEN, snapTicks(drag.origLen + dxTicks));
+      preview = { blockId: drag.blockId, startTick: drag.origStart, lengthTicks };
+    }
+  }
+
+  function onPointerUp() {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    const d = drag;
+    const p = preview;
+    drag = null;
+    preview = null;
+    if (!d) return;
+    if (d.moved && p) {
+      if (d.mode === 'move') {
+        if (d.alt) duplicateBlock(project, d.blockId, p.startTick);
+        else moveBlock(project, d.blockId, p.startTick);
+      } else {
+        resizeBlock(project, d.blockId, p.lengthTicks);
+      }
+    } else {
+      // A click (no real drag) selects the block.
+      selectedBlockIds = new Set([d.blockId]);
+    }
+    refresh();
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (!canEdit) return;
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    if (selectedBlockIds.size === 0) return;
+    // Don't hijack deletes while typing in an input.
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    e.preventDefault();
+    for (const id of selectedBlockIds) deleteBlock(project, id);
+    selectedBlockIds = new Set();
+    refresh();
+  }
+
+  function itemGeom(item: LaneItem): { startTick: number; lengthTicks: number } {
+    if (preview && preview.blockId === item.id) {
+      return { startTick: preview.startTick, lengthTicks: preview.lengthTicks };
+    }
+    return { startTick: item.startTick, lengthTicks: item.lengthTicks };
+  }
+
   const totalTicks = $derived.by(() => {
-    // `lanes` is a reactive dep so width grows as content changes.
     void lanes;
+    void preview;
     return songTotalTicks(project);
   });
   const contentWidthPx = $derived(totalTicks * PX_PER_TICK);
@@ -107,7 +211,6 @@
 <div class="arrangement" data-testid="arrangement-view">
   <div class="scroll">
     <div class="timeline" style:width="{HEADER_WIDTH + contentWidthPx}px">
-      <!-- Ruler row: sticky corner over the header column + the bar ruler. -->
       <div class="ruler-row" style:height="{RULER_HEIGHT}px">
         <div class="corner" style:width="{HEADER_WIDTH}px"></div>
         <TimelineRuler {totalTicks} />
@@ -131,24 +234,27 @@
           </button>
           <div class="lane-body" style:width="{contentWidthPx}px">
             {#each lane.items as item (item.id)}
+              {@const g = itemGeom(item)}
               <BlockView
-                left={item.startTick * PX_PER_TICK}
-                width={item.lengthTicks * PX_PER_TICK}
-                startTick={item.startTick}
-                lengthTicks={item.lengthTicks}
+                left={g.startTick * PX_PER_TICK}
+                width={g.lengthTicks * PX_PER_TICK}
+                startTick={g.startTick}
+                lengthTicks={g.lengthTicks}
                 label={item.label}
                 color={lane.color}
                 loop={item.loop}
-                selected={lane.trackIdx === selectedTrackIdx}
+                selected={selectedBlockIds.has(item.id)}
+                editable={canEdit && item.kind === 'block'}
                 testid={`arrange-block-${lane.trackIdx}-${item.id}`}
+                onPointerDownBody={(e) => startDrag(e, item, 'move')}
+                onPointerDownResize={(e) => startDrag(e, item, 'resize')}
+                onDblClick={() => onDrillIn(lane.trackIdx)}
               />
             {/each}
           </div>
         </div>
       {/each}
 
-      <!-- Single continuous playhead over the lanes (offset past the
-           sticky header column). -->
       <div
         class="playhead"
         data-testid="arrange-playhead"
